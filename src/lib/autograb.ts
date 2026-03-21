@@ -55,12 +55,14 @@ export async function autoGrabForRequest(requestId: number): Promise<AutoGrabRes
     );
 
     if (!bestResult) {
-      // No result found — set request back to APPROVED so admin can handle manually
+      console.log(`[AutoGrab] No suitable torrent found for "${request.game.name}" on ${request.game.platform.name}`);
       return {
         success: false,
         message: `No suitable torrent found for "${request.game.name}" on ${request.game.platform.name}`,
       };
     }
+
+    console.log(`[AutoGrab] Best result: "${bestResult.title}" from ${bestResult.indexer}, seeders=${bestResult.seeders}, size=${bestResult.size}`);
 
     // Get the download URL (prefer magnet, fall back to download URL)
     const downloadLink = bestResult.magnetUrl || bestResult.downloadUrl;

@@ -115,7 +115,11 @@ export class QBittorrentClient {
 
       const text = await retryResponse.text();
       if (!text) return {} as T;
-      return JSON.parse(text);
+      try {
+        return JSON.parse(text);
+      } catch {
+        return text as T;
+      }
     }
 
     if (!response.ok) {
@@ -126,12 +130,17 @@ export class QBittorrentClient {
 
     const text = await response.text();
     if (!text) return {} as T;
-    return JSON.parse(text);
+    try {
+      return JSON.parse(text);
+    } catch {
+      // Some endpoints return plain text (e.g. /app/version returns "v5.1.4")
+      return text as T;
+    }
   }
 
   async testConnection(): Promise<boolean> {
     try {
-      await this.fetch<string>("/app/version");
+      await this.login();
       return true;
     } catch (error) {
       console.error("qBittorrent connection test failed:", error);

@@ -144,30 +144,84 @@ export class ProwlarrClient {
     minSeeders = 0,
     maxSizeMb = 0
   ): Promise<ProwlarrRelease[]> {
-    // Build search query from template
-    let query: string;
+    // Build multiple search queries from most specific to least specific
+    const queries: string[] = [];
+
+    // Clean the game name — remove subtitles after colon for broader matches
+    const cleanName = gameName.split(":")[0].trim();
+
+    // 1. Use template if provided
     if (searchTemplate) {
-      query = searchTemplate
-        .replace("{game_name}", gameName)
-        .replace("{platform}", platformName || "")
-        .trim();
-    } else {
-      query = platformName ? `${gameName} ${platformName}` : gameName;
+      queries.push(
+        searchTemplate
+          .replace("{game_name}", gameName)
+          .replace("{platform}", platformName || "")
+          .trim()
+      );
     }
 
-    const results = await this.search({
-      query,
-      categories: GAME_CATEGORIES,
-      limit: 50,
-    });
+    // 2. Full name + platform
+    if (platformName) {
+      queries.push(`${gameName} ${platformName}`);
+    }
+
+    // 3. Full game name only
+    queries.push(gameName);
+
+    // 4. Cleaned name (before colon) + platform
+    if (cleanName !== gameName && platformName) {
+      queries.push(`${cleanName} ${platformName}`);
+    }
+
+    // 5. Cleaned name only
+    if (cleanName !== gameName) {
+      queries.push(cleanName);
+    }
+
+    // Deduplicate queries
+    const uniqueQueries = [...new Set(queries)];
+
+    let results: ProwlarrRelease[] = [];
+
+    for (const query of uniqueQueries) {
+      // Try with game categories first
+      results = await this.search({
+        query,
+        categories: GAME_CATEGORIES,
+        limit: 50,
+      });
+
+      console.log(`[Prowlarr] Search "${query}" with game categories: ${results.length} raw results`);
+
+      // If no results, try without category filter
+      if (results.length === 0) {
+        results = await this.search({
+          query,
+          limit: 50,
+        });
+        console.log(`[Prowlarr] Search "${query}" without categories: ${results.length} raw results`);
+      }
+
+      if (results.length > 0) {
+        console.log(`[Prowlarr] Found results with query "${query}"`);
+        if (results[0]) {
+          console.log(`[Prowlarr] First result: title="${results[0].title}", protocol="${results[0].protocol}", seeders=${results[0].seeders}, downloadUrl=${!!results[0].downloadUrl}, magnetUrl=${!!results[0].magnetUrl}`);
+        }
+        break;
+      }
+    }
+
+    if (results.length === 0) {
+      console.log(`[Prowlarr] No results found after trying ${uniqueQueries.length} queries`);
+    }
 
     // Filter results
     let filtered = results.filter((r) => {
       // Must have a download URL or magnet URL
       if (!r.downloadUrl && !r.magnetUrl) return false;
 
-      // Must be a torrent (not usenet)
-      if (r.protocol !== "torrent") return false;
+      // Filter out usenet results (keep torrent and unknown protocols)
+      if (r.protocol === "usenet") return false;
 
       // Minimum seeders filter
       if (minSeeders > 0 && (r.seeders ?? 0) < minSeeders) return false;
@@ -177,6 +231,8 @@ export class ProwlarrClient {
 
       return true;
     });
+
+    console.log(`[Prowlarr] After filtering: ${filtered.length} results (from ${results.length} raw)`);
 
     // Sort: most seeders first, then smallest size
     filtered.sort((a, b) => {

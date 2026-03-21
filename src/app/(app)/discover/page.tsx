@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,7 +9,7 @@ import {
   CardContent,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Search, Star, Plus, Check, Loader2 } from "lucide-react";
+import { Search, Star, Plus, Check, Loader2, Filter, X } from "lucide-react";
 
 interface SearchResult {
   igdbId: number;
@@ -31,6 +31,31 @@ export default function DiscoverPage() {
   const [requesting, setRequesting] = useState<number | null>(null);
   const [requested, setRequested] = useState<Set<number>>(new Set());
   const [error, setError] = useState("");
+  const [selectedPlatform, setSelectedPlatform] = useState<string | null>(null);
+
+  // Extract unique platforms from results
+  const availablePlatforms = useMemo(() => {
+    const platformMap = new Map<string, { id: number; name: string; slug: string }>();
+    results.forEach((r) => {
+      r.platforms.forEach((p) => {
+        if (!platformMap.has(p.slug)) {
+          platformMap.set(p.slug, p);
+        }
+      });
+    });
+    // Sort alphabetically
+    return Array.from(platformMap.values()).sort((a, b) =>
+      a.name.localeCompare(b.name)
+    );
+  }, [results]);
+
+  // Filter results by selected platform
+  const filteredResults = useMemo(() => {
+    if (!selectedPlatform) return results;
+    return results.filter((r) =>
+      r.platforms.some((p) => p.slug === selectedPlatform)
+    );
+  }, [results, selectedPlatform]);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,6 +63,7 @@ export default function DiscoverPage() {
 
     setSearching(true);
     setError("");
+    setSelectedPlatform(null);
 
     try {
       const res = await fetch(
@@ -137,10 +163,53 @@ export default function DiscoverPage() {
         </div>
       )}
 
+      {/* Platform Filter */}
+      {availablePlatforms.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Filter className="h-4 w-4" />
+            <span>Filter by platform</span>
+            {selectedPlatform && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 gap-1 px-2 text-xs"
+                onClick={() => setSelectedPlatform(null)}
+              >
+                <X className="h-3 w-3" />
+                Clear
+              </Button>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {availablePlatforms.map((platform) => (
+              <Button
+                key={platform.slug}
+                variant={selectedPlatform === platform.slug ? "default" : "outline"}
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() =>
+                  setSelectedPlatform(
+                    selectedPlatform === platform.slug ? null : platform.slug
+                  )
+                }
+              >
+                {platform.name}
+              </Button>
+            ))}
+          </div>
+          {selectedPlatform && (
+            <p className="text-xs text-muted-foreground">
+              Showing {filteredResults.length} of {results.length} results
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Results */}
-      {results.length > 0 && (
+      {filteredResults.length > 0 && (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {results.map((result) => (
+          {filteredResults.map((result) => (
             <Card
               key={result.igdbId}
               className="overflow-hidden transition-shadow hover:shadow-lg"
@@ -173,11 +242,20 @@ export default function DiscoverPage() {
                       <Badge
                         key={p.id}
                         variant="outline"
-                        className="text-[10px]"
+                        className={`text-[10px] ${
+                          selectedPlatform === p.slug
+                            ? "border-primary text-primary"
+                            : ""
+                        }`}
                       >
                         {p.name}
                       </Badge>
                     ))}
+                    {result.platforms.length > 3 && (
+                      <Badge variant="outline" className="text-[10px]">
+                        +{result.platforms.length - 3}
+                      </Badge>
+                    )}
                   </div>
                 </div>
 
@@ -231,6 +309,19 @@ export default function DiscoverPage() {
               </CardContent>
             </Card>
           ))}
+        </div>
+      )}
+
+      {!searching && filteredResults.length === 0 && results.length > 0 && selectedPlatform && (
+        <div className="py-12 text-center text-muted-foreground">
+          No results for this platform.{" "}
+          <Button
+            variant="link"
+            className="px-1"
+            onClick={() => setSelectedPlatform(null)}
+          >
+            Clear filter
+          </Button>
         </div>
       )}
 

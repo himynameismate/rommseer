@@ -20,6 +20,23 @@ export async function PATCH(
     return NextResponse.json({ error: "Invalid status" }, { status: 400 });
   }
 
+  // Check current status to prevent duplicate auto-grabs
+  const currentRequest = await prisma.request.findUnique({
+    where: { id: Number(params.id) },
+  });
+
+  if (!currentRequest) {
+    return NextResponse.json({ error: "Request not found" }, { status: 404 });
+  }
+
+  // Don't re-approve if already downloading or available
+  if (
+    status === "APPROVED" &&
+    (currentRequest.status === "DOWNLOADING" || currentRequest.status === "AVAILABLE")
+  ) {
+    return NextResponse.json({ error: "Request is already being processed" }, { status: 400 });
+  }
+
   const request = await prisma.request.update({
     where: { id: Number(params.id) },
     data: { status },
@@ -29,23 +46,25 @@ export async function PATCH(
     },
   });
 
-  // If approved, try auto-grab via Prowlarr + qBittorrent
-  let autoGrabResult = null;
-  if (status === "APPROVED") {
+  // If approved, try auto-grab via Prowlarr + qBittorrent (non-blocking)
+  if (status === "APPROVED" && currentRequest.status === "PENDING") {
     const settings = await prisma.settings.findUnique({ where: { id: 1 } });
     if (settings?.prowlarrAutoGrab && settings?.prowlarrUrl && settings?.qbitUrl) {
-      autoGrabResult = await autoGrabForRequest(request.id);
-      // Re-fetch the request to get updated status
-      const updatedRequest = await prisma.request.findUnique({
-        where: { id: request.id },
-        include: {
-          game: { include: { platform: true } },
-          user: { select: { id: true, name: true, email: true } },
-        },
-      });
+      // Run auto-grab in the background — don't block the response
+      autoGrabForRequest(request.id)
+        .then((result) => {
+          console.log(`[AutoGrab] Completed for request ${request.id}:`, result.message);
+        })
+        .catch((err) => {
+          console.error(`[AutoGrab] Error for request ${request.id}:`, err);
+        });
+
       return NextResponse.json({
-        ...updatedRequest,
-        autoGrab: autoGrabResult,
+        ...request,
+        autoGrab: {
+          success: true,
+          message: "Auto-grab started in background...",
+        },
       });
     }
   }
@@ -70,11 +89,12 @@ export async function DELETE(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  // Only admin or the request owner can delete
   if (session.user.role !== "ADMIN" && request.userId !== session.user.id) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  // Delete associated downloads first, then the request
+  await prisma.download.deleteMany({ where: { requestId: Number(params.id) } });
   await prisma.request.delete({ where: { id: Number(params.id) } });
 
   return NextResponse.json({ success: true });
