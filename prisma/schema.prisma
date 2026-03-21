@@ -1,0 +1,107 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String    @id @default(cuid())
+  name           String
+  email          String    @unique
+  hashedPassword String
+  role           String    @default("USER") // USER | ADMIN
+  avatar         String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  requests       Request[]
+}
+
+model Platform {
+  id       Int     @id @default(autoincrement())
+  slug     String  @unique
+  name     String
+  igdbId   Int?
+  rommId   Int?
+  icon     String?
+  games    Game[]
+}
+
+model Game {
+  id          Int       @id @default(autoincrement())
+  igdbId      Int?      @unique
+  name        String
+  summary     String?
+  coverUrl    String?
+  releaseDate String?
+  rating      Float?
+  platformId  Int
+  platform    Platform  @relation(fields: [platformId], references: [id])
+  rommId      Int?      // ID in the RomM library if available
+  isAvailable Boolean   @default(false)
+  requests    Request[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([platformId])
+  @@index([name])
+}
+
+model Request {
+  id        Int        @id @default(autoincrement())
+  status    String     @default("PENDING") // PENDING | APPROVED | DECLINED | AVAILABLE | DOWNLOADING
+  userId    String
+  user      User       @relation(fields: [userId], references: [id])
+  gameId    Int
+  game      Game       @relation(fields: [gameId], references: [id])
+  comment   String?
+  downloads Download[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@unique([userId, gameId])
+  @@index([status])
+}
+
+model Settings {
+  id                    Int     @id @default(1)
+  rommUrl               String  @default("")
+  rommApiKey            String  @default("")
+  rommUsername           String  @default("")
+  rommPassword          String  @default("")
+  igdbClientId          String  @default("")
+  igdbClientSecret      String  @default("")
+  qbitUrl               String  @default("")
+  qbitUsername           String  @default("")
+  qbitPassword          String  @default("")
+  qbitCategory          String  @default("rommseer")
+  qbitSavePath          String  @default("")
+  prowlarrUrl           String  @default("")
+  prowlarrApiKey        String  @default("")
+  prowlarrAutoGrab      Boolean @default(false)
+  prowlarrSearchTemplate String @default("{game_name} {platform} ROM")
+  prowlarrMinSeeders    Int     @default(1)
+  prowlarrMaxSizeMb     Int     @default(0)
+  prowlarrPreferredIndexers String @default("")
+  initialized           Boolean @default(false)
+}
+
+model Download {
+  id          Int      @id @default(autoincrement())
+  requestId   Int
+  request     Request  @relation(fields: [requestId], references: [id])
+  torrentHash String?
+  torrentName String?
+  magnetUrl   String?
+  status      String   @default("PENDING") // PENDING | DOWNLOADING | COMPLETED | FAILED
+  progress    Float    @default(0)
+  error       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([requestId])
+  @@index([torrentHash])
+  @@index([status])
+}

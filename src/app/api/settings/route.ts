@@ -1,0 +1,224 @@
+import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { prisma } from "@/lib/db";
+import { RomMClient } from "@/lib/romm";
+import { QBittorrentClient } from "@/lib/qbittorrent";
+import { ProwlarrClient } from "@/lib/prowlarr";
+
+export async function GET() {
+  const session = await getServerSession(authOptions);
+  if (!session || session.user.role !== "ADMIN") {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const settings = await prisma.settings.findUnique({ where: { id: 1 } });
+  if (!settings) {
+    return NextResponse.json({
+      rommUrl: "",
+      rommUsername: "",
+      rommPassword: "",
+      igdbClientId: "",
+      igdbClientSecret: "",
+      qbitUrl: "",
+      qbitUsername: "",
+      qbitPassword: "",
+      qbitCategory: "rommseer",
+      qbitSavePath: "",
+      prowlarrUrl: "",
+      prowlarrApiKey: "",
+      prowlarrAutoGrab: false,
+      prowlarrSearchTemplate: "{game_name} {platform} ROM",
+      prowlarrMinSeeders: 1,
+      prowlarrMaxSizeMb: 0,
+      prowlarrPreferredIndexers: "",
+      initialized: false,
+    });
+  }
+
+  return NextResponse.json({
+    ...settings,
+    rommPassword: settings.rommPassword ? "********" : "",
+    igdbClientSecret: settings.igdbClientSecret ? "********" : "",
+    qbitPassword: settings.qbitPassword ? "********" : "",
+    prowlarrApiKey: settings.prowlarrApiKey ? "********" : "",
+  });
+}
+
+export async function PUT(req: NextRequest) {
+  const session = await getServerSession(authOptions);
+  if (!session || session.user.role !== "ADMIN") {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const body = await req.json();
+  const {
+    rommUrl,
+    rommUsername,
+    rommPassword,
+    igdbClientId,
+    igdbClientSecret,
+    qbitUrl,
+    qbitUsername,
+    qbitPassword,
+    qbitCategory,
+    qbitSavePath,
+    prowlarrUrl,
+    prowlarrApiKey,
+    prowlarrAutoGrab,
+    prowlarrSearchTemplate,
+    prowlarrMinSeeders,
+    prowlarrMaxSizeMb,
+    prowlarrPreferredIndexers,
+  } = body;
+
+  const data: Record<string, unknown> = { initialized: true };
+
+  // RomM
+  if (rommUrl !== undefined) data.rommUrl = rommUrl;
+  if (rommUsername !== undefined) data.rommUsername = rommUsername;
+  if (rommPassword && rommPassword !== "********") data.rommPassword = rommPassword;
+
+  // IGDB
+  if (igdbClientId !== undefined) data.igdbClientId = igdbClientId;
+  if (igdbClientSecret && igdbClientSecret !== "********")
+    data.igdbClientSecret = igdbClientSecret;
+
+  // qBittorrent
+  if (qbitUrl !== undefined) data.qbitUrl = qbitUrl;
+  if (qbitUsername !== undefined) data.qbitUsername = qbitUsername;
+  if (qbitPassword && qbitPassword !== "********") data.qbitPassword = qbitPassword;
+  if (qbitCategory !== undefined) data.qbitCategory = qbitCategory;
+  if (qbitSavePath !== undefined) data.qbitSavePath = qbitSavePath;
+
+  // Prowlarr
+  if (prowlarrUrl !== undefined) data.prowlarrUrl = prowlarrUrl;
+  if (prowlarrApiKey && prowlarrApiKey !== "********")
+    data.prowlarrApiKey = prowlarrApiKey;
+  if (prowlarrAutoGrab !== undefined) data.prowlarrAutoGrab = prowlarrAutoGrab;
+  if (prowlarrSearchTemplate !== undefined)
+    data.prowlarrSearchTemplate = prowlarrSearchTemplate;
+  if (prowlarrMinSeeders !== undefined)
+    data.prowlarrMinSeeders = Number(prowlarrMinSeeders);
+  if (prowlarrMaxSizeMb !== undefined)
+    data.prowlarrMaxSizeMb = Number(prowlarrMaxSizeMb);
+  if (prowlarrPreferredIndexers !== undefined)
+    data.prowlarrPreferredIndexers = prowlarrPreferredIndexers;
+
+  const settings = await prisma.settings.upsert({
+    where: { id: 1 },
+    create: {
+      id: 1,
+      rommUrl: rommUrl ?? "",
+      rommApiKey: "",
+      rommUsername: rommUsername ?? "",
+      rommPassword: rommPassword ?? "",
+      igdbClientId: igdbClientId ?? "",
+      igdbClientSecret: igdbClientSecret ?? "",
+      qbitUrl: qbitUrl ?? "",
+      qbitUsername: qbitUsername ?? "",
+      qbitPassword: qbitPassword ?? "",
+      qbitCategory: qbitCategory ?? "rommseer",
+      qbitSavePath: qbitSavePath ?? "",
+      prowlarrUrl: prowlarrUrl ?? "",
+      prowlarrApiKey: prowlarrApiKey ?? "",
+      prowlarrAutoGrab: prowlarrAutoGrab ?? false,
+      prowlarrSearchTemplate: prowlarrSearchTemplate ?? "{game_name} {platform} ROM",
+      prowlarrMinSeeders: prowlarrMinSeeders ?? 1,
+      prowlarrMaxSizeMb: prowlarrMaxSizeMb ?? 0,
+      prowlarrPreferredIndexers: prowlarrPreferredIndexers ?? "",
+      initialized: true,
+    },
+    update: data,
+  });
+
+  return NextResponse.json({
+    ...settings,
+    rommPassword: settings.rommPassword ? "********" : "",
+    igdbClientSecret: settings.igdbClientSecret ? "********" : "",
+    qbitPassword: settings.qbitPassword ? "********" : "",
+    prowlarrApiKey: settings.prowlarrApiKey ? "********" : "",
+  });
+}
+
+export async function POST(req: NextRequest) {
+  const session = await getServerSession(authOptions);
+  if (!session || session.user.role !== "ADMIN") {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const body = await req.json();
+  const { action } = body;
+
+  if (action === "test-romm") {
+    const settings = await prisma.settings.findUnique({ where: { id: 1 } });
+    if (!settings?.rommUrl) {
+      return NextResponse.json(
+        { success: false, error: "RomM URL not configured" },
+        { status: 400 }
+      );
+    }
+    const client = new RomMClient(
+      settings.rommUrl,
+      settings.rommUsername,
+      settings.rommPassword
+    );
+    const success = await client.testConnection();
+    return NextResponse.json({ success });
+  }
+
+  if (action === "test-qbit") {
+    const settings = await prisma.settings.findUnique({ where: { id: 1 } });
+    if (!settings?.qbitUrl) {
+      return NextResponse.json(
+        { success: false, error: "qBittorrent URL not configured" },
+        { status: 400 }
+      );
+    }
+    try {
+      const client = new QBittorrentClient(
+        settings.qbitUrl,
+        settings.qbitUsername,
+        settings.qbitPassword
+      );
+      const success = await client.testConnection();
+      return NextResponse.json({ success });
+    } catch (error) {
+      console.error("qBittorrent connection test failed:", error);
+      return NextResponse.json({ success: false });
+    }
+  }
+
+  if (action === "test-prowlarr") {
+    const settings = await prisma.settings.findUnique({ where: { id: 1 } });
+    if (!settings?.prowlarrUrl) {
+      return NextResponse.json(
+        { success: false, error: "Prowlarr URL not configured" },
+        { status: 400 }
+      );
+    }
+    if (!settings?.prowlarrApiKey) {
+      return NextResponse.json(
+        { success: false, error: "Prowlarr API Key not configured. Save settings first." },
+        { status: 400 }
+      );
+    }
+    try {
+      const client = new ProwlarrClient(
+        settings.prowlarrUrl,
+        settings.prowlarrApiKey
+      );
+      const success = await client.testConnection();
+      if (!success) {
+        console.error("Prowlarr connection test returned false. URL:", settings.prowlarrUrl);
+      }
+      return NextResponse.json({ success });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      console.error("Prowlarr connection test failed:", msg);
+      return NextResponse.json({ success: false, error: msg });
+    }
+  }
+
+  return NextResponse.json({ error: "Unknown action" }, { status: 400 });
+}

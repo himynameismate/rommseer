@@ -1,0 +1,16 @@
+services:
+  rommseer:
+    build: .
+    container_name: rommseer
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=file:/app/data/rommseer.db
+      - NEXTAUTH_URL=http://localhost:3000
+      - NEXTAUTH_SECRET=change-me-to-a-random-secret
+    volumes:
+      - rommseer_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  rommseer_data:
