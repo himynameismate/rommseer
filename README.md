@@ -48,19 +48,19 @@ Zero clicks with auto-approve. Fully automated end-to-end.
 ```yaml
 services:
   rommseer:
-    build: .
+    image: ghcr.io/himynameismate/rommseer:latest
     container_name: rommseer
     ports:
       - "3000:3000"
     environment:
       - DATABASE_URL=file:/app/data/rommseer.db
-      - NEXTAUTH_URL=http://localhost:3000
+      - NEXTAUTH_URL=http://YOUR_SERVER_IP:3000
       - NEXTAUTH_SECRET=your-random-secret-here
     volumes:
       - rommseer_data:/app/data
       # Mount the RomM library so Rommseer can copy completed ROMs into it.
       # This must point to the same directory RomM uses as its library root.
-      # Then set "Library Path" in Settings > RomM to /romm/library
+      # Then set "Library Path" in Settings → RomM to /romm/library
       - /path/to/romm/library:/romm/library
       # Mount the download client's completed-downloads folder so Rommseer
       # can read finished files. Adjust to match your SABnzbd/qBittorrent config.
@@ -71,17 +71,21 @@ volumes:
   rommseer_data:
 ```
 
-> **Important:** The volume mounts above are required for the post-download copy feature.
-> Rommseer needs read access to where your download client saves completed files, and
-> write access to your RomM library directory. After mounting, set the **Library Path**
-> in Settings > RomM to the container path (e.g. `/romm/library`).
+> **Important: Volume mounts are required** for the post-download copy feature.
+>
+> | Mount | Purpose | Example (Unraid) |
+> |-------|---------|-----------------|
+> | `/romm/library` | RomM library root — Rommseer copies ROMs here | `/mnt/user/data/romm/library` |
+> | `/downloads` | Download client's completed folder | `/mnt/cache/Downloads/Complete` |
+>
+> After starting, go to **Settings → RomM** and set **Library Path** to `/romm/library`.
 
 ```bash
 # Generate a secret
 openssl rand -hex 32
 
 # Start
-docker compose up -d --build
+docker compose up -d
 ```
 
 Access at `http://localhost:3000`
@@ -130,17 +134,32 @@ All configuration is done through the **Settings** page in the admin UI:
 
 ## Unraid Deployment
 
-1. Clone the repo to `/mnt/user/appdata/rommseer`
-2. Build: `docker build -t rommseer .`
-3. Add container in Unraid Docker UI:
-   - **Port:** 3000 → 3000
-   - **Path:** `/app/data` → `/mnt/user/appdata/rommseer/data`
-   - **Path:** `/romm/library` → `/mnt/user/data/romm/library` (your RomM library root)
-   - **Path:** `/downloads` → `/mnt/user/data/downloads` (your download client's completed folder)
-   - **Variable:** `NEXTAUTH_URL` = `http://YOUR_UNRAID_IP:3000`
-   - **Variable:** `NEXTAUTH_SECRET` = (random secret)
-   - **Variable:** `DATABASE_URL` = `file:/app/data/rommseer.db`
-4. In Settings → RomM, set **Library Path** to `/romm/library`
+1. Create a `docker-compose.yml` anywhere on your server (e.g. `/mnt/user/appdata/rommseer/docker-compose.yml`):
+
+```yaml
+services:
+  rommseer:
+    image: ghcr.io/himynameismate/rommseer:latest
+    container_name: rommseer
+    ports:
+      - "3001:3000"
+    environment:
+      - DATABASE_URL=file:/app/data/rommseer.db
+      - NEXTAUTH_URL=http://YOUR_UNRAID_IP:3001
+      - NEXTAUTH_SECRET=generate-a-random-secret
+    volumes:
+      - /mnt/cache/Container/rommseer:/app/data
+      - /mnt/data/romm/library:/romm/library
+      - /mnt/cache/Downloads/Complete:/downloads
+    restart: unless-stopped
+```
+
+2. Adjust the volume paths to match your setup:
+   - `/mnt/data/romm/library` → must be the **same directory** your RomM container uses as its library root
+   - `/mnt/cache/Downloads/Complete` → must be where SABnzbd/qBittorrent saves completed downloads
+3. Start: `docker compose up -d`
+4. Open `http://YOUR_UNRAID_IP:3001` and log in with `admin@rommseer.local` / `admin`
+5. Go to **Settings → RomM** and set **Library Path** to `/romm/library`
 
 ## Tech Stack
 

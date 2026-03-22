@@ -1,6 +1,6 @@
 services:
   rommseer:
-    build: .
+    image: ghcr.io/himynameismate/rommseer:latest
     container_name: rommseer
     ports:
       - "3000:3000"
