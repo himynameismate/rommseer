@@ -163,6 +163,32 @@ export class RomMClient {
   async getRom(id: number): Promise<RomMRom> {
     return this.fetch<RomMRom>(`/roms/${id}`);
   }
+
+  /** Trigger a scan of a specific platform in RomM. */
+  async scanPlatform(platformId: number): Promise<void> {
+    try {
+      await this.fetch(`/platforms/${platformId}/roms/scan`, { method: "PUT" });
+      console.log(`[RomM] Scan triggered for platform ${platformId}`);
+    } catch (e) {
+      // Some RomM versions use different scan endpoints, try alternatives
+      try {
+        await this.fetch(`/raw/scan`, { method: "PUT" });
+        console.log(`[RomM] Full library scan triggered (fallback)`);
+      } catch (e2) {
+        console.error(`[RomM] Scan failed:`, e2 instanceof Error ? e2.message : e2);
+      }
+    }
+  }
+
+  /** Trigger a full library scan in RomM. */
+  async scanAll(): Promise<void> {
+    try {
+      await this.fetch(`/platforms/scan`, { method: "PUT" });
+      console.log(`[RomM] Full library scan triggered`);
+    } catch (e) {
+      console.error(`[RomM] Scan failed:`, e instanceof Error ? e.message : e);
+    }
+  }
 }
 
 export async function getRomMClient(): Promise<RomMClient | null> {

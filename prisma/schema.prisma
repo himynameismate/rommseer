@@ -85,23 +85,30 @@ model Settings {
   prowlarrMinSeeders    Int     @default(1)
   prowlarrMaxSizeMb     Int     @default(0)
   prowlarrPreferredIndexers String @default("")
+  sabnzbdUrl            String  @default("")
+  sabnzbdApiKey         String  @default("")
+  sabnzbdCategory       String  @default("rommseer")
+  autoApprove           Boolean @default(false)
   initialized           Boolean @default(false)
 }
 
 model Download {
-  id          Int      @id @default(autoincrement())
-  requestId   Int
-  request     Request  @relation(fields: [requestId], references: [id])
-  torrentHash String?
-  torrentName String?
-  magnetUrl   String?
-  status      String   @default("PENDING") // PENDING | DOWNLOADING | COMPLETED | FAILED
-  progress    Float    @default(0)
-  error       String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id           Int      @id @default(autoincrement())
+  requestId    Int
+  request      Request  @relation(fields: [requestId], references: [id])
+  downloadType String   @default("torrent") // "torrent" | "usenet"
+  torrentHash  String?
+  torrentName  String?
+  magnetUrl    String?
+  nzbId        String?  // SABnzbd NZO ID for usenet downloads
+  status       String   @default("PENDING") // PENDING | DOWNLOADING | COMPLETED | FAILED
+  progress     Float    @default(0)
+  error        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   @@index([requestId])
   @@index([torrentHash])
+  @@index([nzbId])
   @@index([status])
 }

@@ -22,6 +22,8 @@ import {
   ArrowUpDown,
   HardDrive,
   Users,
+  RotateCcw,
+  Undo2,
 } from "lucide-react";
 import { formatDate, getStatusBadgeVariant } from "@/lib/utils";
 
@@ -55,6 +57,7 @@ interface ProwlarrResult {
   magnetUrl: string | null;
   indexer: string;
   publishDate: string;
+  protocol: string;
   age: number;
   grabs: number | null;
 }
@@ -133,9 +136,10 @@ export default function RequestsPage() {
     fetchRequests();
   };
 
-  const sendToQbit = async (
+  const sendToDownloadClient = async (
     requestId: number,
-    url?: string
+    url?: string,
+    protocol?: string
   ) => {
     const link = url || magnetUrl.trim();
     if (!link) return;
@@ -145,7 +149,7 @@ export default function RequestsPage() {
       const res = await fetch("/api/downloads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ requestId, magnetUrl: link }),
+        body: JSON.stringify({ requestId, magnetUrl: link, protocol }),
       });
 
       if (res.ok) {
@@ -157,10 +161,10 @@ export default function RequestsPage() {
         fetchRequests();
       } else {
         const data = await res.json();
-        alert(data.error || "Failed to add torrent");
+        alert(data.error || "Failed to add download");
       }
     } catch {
-      alert("Failed to send torrent to qBittorrent");
+      alert("Failed to send to download client");
     } finally {
       setSendingTorrent(false);
     }
@@ -194,7 +198,7 @@ export default function RequestsPage() {
       return;
     }
     setGrabbingGuid(result.guid);
-    await sendToQbit(requestId, link);
+    await sendToDownloadClient(requestId, link, result.protocol);
     setGrabbingGuid(null);
   };
 
@@ -381,15 +385,73 @@ export default function RequestsPage() {
                       </>
                     )}
                     {isAdmin && request.status === "DOWNLOADING" && (
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="text-purple-500 hover:text-purple-600"
-                        onClick={() => updateStatus(request.id, "AVAILABLE")}
-                        title="Mark as Available"
-                      >
-                        <Package className="h-5 w-5" />
-                      </Button>
+                      <>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="text-yellow-500 hover:text-yellow-600"
+                          onClick={() => updateStatus(request.id, "RETRY")}
+                          title="Retry auto-grab"
+                        >
+                          <RotateCcw className="h-5 w-5" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="text-gray-500 hover:text-gray-600"
+                          onClick={() => updateStatus(request.id, "APPROVED")}
+                          title="Reset to Approved"
+                        >
+                          <Undo2 className="h-5 w-5" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="text-orange-500 hover:text-orange-600"
+                          onClick={() => {
+                            if (searchingId === request.id) {
+                              setSearchingId(null);
+                              setSearchResults([]);
+                            } else {
+                              setSearchingId(request.id);
+                              setMagnetInputId(null);
+                              searchProwlarr(
+                                request.game.name,
+                                request.game.platform.name
+                              );
+                            }
+                          }}
+                          title="Search Prowlarr"
+                        >
+                          <Search className="h-5 w-5" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="text-blue-500 hover:text-blue-600"
+                          onClick={() => {
+                            if (magnetInputId === request.id) {
+                              setMagnetInputId(null);
+                            } else {
+                              setMagnetInputId(request.id);
+                              setSearchingId(null);
+                              setSearchResults([]);
+                            }
+                          }}
+                          title="Manual magnet/NZB link"
+                        >
+                          <Link2 className="h-5 w-5" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="text-purple-500 hover:text-purple-600"
+                          onClick={() => updateStatus(request.id, "AVAILABLE")}
+                          title="Mark as Available"
+                        >
+                          <Package className="h-5 w-5" />
+                        </Button>
+                      </>
                     )}
                     <Button
                       size="icon"
@@ -453,14 +515,30 @@ export default function RequestsPage() {
                                 {result.title}
                               </p>
                               <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                                <Badge
+                                  variant="outline"
+                                  className={`text-[10px] ${
+                                    result.protocol === "usenet"
+                                      ? "border-blue-500 text-blue-500"
+                                      : "border-green-500 text-green-500"
+                                  }`}
+                                >
+                                  {result.protocol === "usenet" ? "NZB" : "Torrent"}
+                                </Badge>
                                 <span className="flex items-center gap-1">
                                   <HardDrive className="h-3 w-3" />
                                   {formatBytes(result.size)}
                                 </span>
-                                <span className="flex items-center gap-1">
-                                  <Users className="h-3 w-3" />
-                                  {result.seeders ?? "?"} S / {result.leechers ?? "?"} L
-                                </span>
+                                {result.protocol !== "usenet" ? (
+                                  <span className="flex items-center gap-1">
+                                    <Users className="h-3 w-3" />
+                                    {result.seeders ?? "?"} S / {result.leechers ?? "?"} L
+                                  </span>
+                                ) : (
+                                  result.age > 0 && (
+                                    <span>{result.age}d old</span>
+                                  )
+                                )}
                                 <span className="flex items-center gap-1">
                                   <ArrowUpDown className="h-3 w-3" />
                                   {result.indexer}
@@ -506,12 +584,12 @@ export default function RequestsPage() {
                       onChange={(e) => setMagnetUrl(e.target.value)}
                       className="flex-1"
                       onKeyDown={(e) => {
-                        if (e.key === "Enter") sendToQbit(request.id);
+                        if (e.key === "Enter") sendToDownloadClient(request.id);
                       }}
                     />
                     <Button
                       size="sm"
-                      onClick={() => sendToQbit(request.id)}
+                      onClick={() => sendToDownloadClient(request.id)}
                       disabled={sendingTorrent || !magnetUrl.trim()}
                     >
                       {sendingTorrent ? (

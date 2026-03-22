@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { RomMClient } from "@/lib/romm";
 import { QBittorrentClient } from "@/lib/qbittorrent";
 import { ProwlarrClient } from "@/lib/prowlarr";
+import { SABnzbdClient } from "@/lib/sabnzbd";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -32,6 +33,10 @@ export async function GET() {
       prowlarrMinSeeders: 1,
       prowlarrMaxSizeMb: 0,
       prowlarrPreferredIndexers: "",
+      sabnzbdUrl: "",
+      sabnzbdApiKey: "",
+      sabnzbdCategory: "rommseer",
+      autoApprove: false,
       initialized: false,
     });
   }
@@ -42,6 +47,7 @@ export async function GET() {
     igdbClientSecret: settings.igdbClientSecret ? "********" : "",
     qbitPassword: settings.qbitPassword ? "********" : "",
     prowlarrApiKey: settings.prowlarrApiKey ? "********" : "",
+    sabnzbdApiKey: settings.sabnzbdApiKey ? "********" : "",
   });
 }
 
@@ -70,6 +76,10 @@ export async function PUT(req: NextRequest) {
     prowlarrMinSeeders,
     prowlarrMaxSizeMb,
     prowlarrPreferredIndexers,
+    sabnzbdUrl,
+    sabnzbdApiKey,
+    sabnzbdCategory,
+    autoApprove,
   } = body;
 
   const data: Record<string, unknown> = { initialized: true };
@@ -105,6 +115,13 @@ export async function PUT(req: NextRequest) {
   if (prowlarrPreferredIndexers !== undefined)
     data.prowlarrPreferredIndexers = prowlarrPreferredIndexers;
 
+  // SABnzbd
+  if (sabnzbdUrl !== undefined) data.sabnzbdUrl = sabnzbdUrl;
+  if (sabnzbdApiKey && sabnzbdApiKey !== "********")
+    data.sabnzbdApiKey = sabnzbdApiKey;
+  if (sabnzbdCategory !== undefined) data.sabnzbdCategory = sabnzbdCategory;
+  if (autoApprove !== undefined) data.autoApprove = autoApprove;
+
   const settings = await prisma.settings.upsert({
     where: { id: 1 },
     create: {
@@ -127,6 +144,10 @@ export async function PUT(req: NextRequest) {
       prowlarrMinSeeders: prowlarrMinSeeders ?? 1,
       prowlarrMaxSizeMb: prowlarrMaxSizeMb ?? 0,
       prowlarrPreferredIndexers: prowlarrPreferredIndexers ?? "",
+      sabnzbdUrl: sabnzbdUrl ?? "",
+      sabnzbdApiKey: sabnzbdApiKey ?? "",
+      sabnzbdCategory: sabnzbdCategory ?? "rommseer",
+      autoApprove: autoApprove ?? false,
       initialized: true,
     },
     update: data,
@@ -138,6 +159,7 @@ export async function PUT(req: NextRequest) {
     igdbClientSecret: settings.igdbClientSecret ? "********" : "",
     qbitPassword: settings.qbitPassword ? "********" : "",
     prowlarrApiKey: settings.prowlarrApiKey ? "********" : "",
+    sabnzbdApiKey: settings.sabnzbdApiKey ? "********" : "",
   });
 }
 
@@ -216,6 +238,34 @@ export async function POST(req: NextRequest) {
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
       console.error("Prowlarr connection test failed:", msg);
+      return NextResponse.json({ success: false, error: msg });
+    }
+  }
+
+  if (action === "test-sabnzbd") {
+    const settings = await prisma.settings.findUnique({ where: { id: 1 } });
+    if (!settings?.sabnzbdUrl) {
+      return NextResponse.json(
+        { success: false, error: "SABnzbd URL not configured" },
+        { status: 400 }
+      );
+    }
+    if (!settings?.sabnzbdApiKey) {
+      return NextResponse.json(
+        { success: false, error: "SABnzbd API Key not configured. Save settings first." },
+        { status: 400 }
+      );
+    }
+    try {
+      const client = new SABnzbdClient(
+        settings.sabnzbdUrl,
+        settings.sabnzbdApiKey
+      );
+      const success = await client.testConnection();
+      return NextResponse.json({ success });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      console.error("SABnzbd connection test failed:", msg);
       return NextResponse.json({ success: false, error: msg });
     }
   }

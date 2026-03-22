@@ -16,7 +16,7 @@ export async function PATCH(
   const body = await req.json();
   const { status } = body;
 
-  if (!["APPROVED", "DECLINED", "AVAILABLE", "DOWNLOADING"].includes(status)) {
+  if (!["APPROVED", "DECLINED", "AVAILABLE", "DOWNLOADING", "RETRY"].includes(status)) {
     return NextResponse.json({ error: "Invalid status" }, { status: 400 });
   }
 
@@ -29,12 +29,47 @@ export async function PATCH(
     return NextResponse.json({ error: "Request not found" }, { status: 404 });
   }
 
-  // Don't re-approve if already downloading or available
-  if (
-    status === "APPROVED" &&
-    (currentRequest.status === "DOWNLOADING" || currentRequest.status === "AVAILABLE")
-  ) {
-    return NextResponse.json({ error: "Request is already being processed" }, { status: 400 });
+  // Handle RETRY — clean up failed downloads and re-run auto-grab
+  if (status === "RETRY") {
+    // Delete failed download records so auto-grab can create fresh ones
+    await prisma.download.deleteMany({
+      where: { requestId: Number(params.id), status: "FAILED" },
+    });
+
+    const request = await prisma.request.update({
+      where: { id: Number(params.id) },
+      data: { status: "APPROVED" },
+      include: {
+        game: { include: { platform: true } },
+        user: { select: { id: true, name: true, email: true } },
+      },
+    });
+
+    const settings = await prisma.settings.findUnique({ where: { id: 1 } });
+    if (settings?.prowlarrAutoGrab && settings?.prowlarrUrl) {
+      autoGrabForRequest(request.id)
+        .then((result) => {
+          console.log(`[AutoGrab] Retry completed for request ${request.id}:`, result.message);
+        })
+        .catch((err) => {
+          console.error(`[AutoGrab] Retry error for request ${request.id}:`, err);
+        });
+
+      return NextResponse.json({
+        ...request,
+        autoGrab: {
+          success: true,
+          message: "Retry auto-grab started in background...",
+        },
+      });
+    }
+
+    return NextResponse.json(request);
+  }
+
+  // Don't re-approve if already available
+  if (status === "APPROVED" && currentRequest.status === "AVAILABLE") {
+    return NextResponse.json({ error: "Request is already available" }, { status: 400 });
   }
 
   const request = await prisma.request.update({
@@ -46,11 +81,10 @@ export async function PATCH(
     },
   });
 
-  // If approved, try auto-grab via Prowlarr + qBittorrent (non-blocking)
+  // If approved from PENDING, try auto-grab via Prowlarr (non-blocking)
   if (status === "APPROVED" && currentRequest.status === "PENDING") {
     const settings = await prisma.settings.findUnique({ where: { id: 1 } });
-    if (settings?.prowlarrAutoGrab && settings?.prowlarrUrl && settings?.qbitUrl) {
-      // Run auto-grab in the background — don't block the response
+    if (settings?.prowlarrAutoGrab && settings?.prowlarrUrl) {
       autoGrabForRequest(request.id)
         .then((result) => {
           console.log(`[AutoGrab] Completed for request ${request.id}:`, result.message);

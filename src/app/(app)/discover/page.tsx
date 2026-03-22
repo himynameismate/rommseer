@@ -28,10 +28,11 @@ export default function DiscoverPage() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
-  const [requesting, setRequesting] = useState<number | null>(null);
-  const [requested, setRequested] = useState<Set<number>>(new Set());
+  const [requesting, setRequesting] = useState<string | null>(null); // "igdbId-platformSlug"
+  const [requested, setRequested] = useState<Set<string>>(new Set()); // "igdbId-platformSlug"
   const [error, setError] = useState("");
   const [selectedPlatform, setSelectedPlatform] = useState<string | null>(null);
+  const [pickingPlatform, setPickingPlatform] = useState<number | null>(null); // igdbId of game showing platform picker
 
   // Extract unique platforms from results
   const availablePlatforms = useMemo(() => {
@@ -85,12 +86,12 @@ export default function DiscoverPage() {
     }
   };
 
-  const handleRequest = async (result: SearchResult) => {
-    setRequesting(result.igdbId);
+  const handleRequest = async (result: SearchResult, platform: { id: number; name: string; slug: string }) => {
+    const key = `${result.igdbId}-${platform.slug}`;
+    setRequesting(key);
+    setPickingPlatform(null);
 
     try {
-      // First, ensure the game exists in our DB
-      const platformSlug = result.platforms[0]?.slug ?? "unknown";
       const gameRes = await fetch("/api/games", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -101,22 +102,20 @@ export default function DiscoverPage() {
           coverUrl: result.coverUrl,
           releaseDate: result.releaseDate,
           rating: result.rating,
-          platformSlug,
+          platformSlug: platform.slug,
         }),
       });
 
       const game = await gameRes.json();
-      const gameId = game.id;
 
-      // Then create the request
       const reqRes = await fetch("/api/requests", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ gameId }),
+        body: JSON.stringify({ gameId: game.id }),
       });
 
       if (reqRes.ok) {
-        setRequested((prev) => new Set(prev).add(result.igdbId));
+        setRequested((prev) => new Set(prev).add(key));
       } else {
         const data = await reqRes.json();
         setError(data.error || "Failed to submit request");
@@ -277,35 +276,80 @@ export default function DiscoverPage() {
                   </p>
                 )}
 
-                <Button
-                  className="w-full"
-                  size="sm"
-                  disabled={
-                    result.isAvailable ||
-                    requested.has(result.igdbId) ||
-                    requesting === result.igdbId
-                  }
-                  onClick={() => handleRequest(result)}
-                >
-                  {result.isAvailable ? (
-                    <>
-                      <Check className="mr-2 h-4 w-4" />
-                      In Library
-                    </>
-                  ) : requested.has(result.igdbId) ? (
-                    <>
-                      <Check className="mr-2 h-4 w-4" />
-                      Requested
-                    </>
-                  ) : requesting === result.igdbId ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <>
-                      <Plus className="mr-2 h-4 w-4" />
-                      Request
-                    </>
-                  )}
-                </Button>
+                {/* Platform picker or single-platform request button */}
+                {result.isAvailable ? (
+                  <Button className="w-full" size="sm" disabled>
+                    <Check className="mr-2 h-4 w-4" />
+                    In Library
+                  </Button>
+                ) : pickingPlatform === result.igdbId ? (
+                  <div className="space-y-1.5">
+                    <p className="text-xs text-muted-foreground text-center">Select platform:</p>
+                    {result.platforms.map((p) => {
+                      const key = `${result.igdbId}-${p.slug}`;
+                      const done = requested.has(key);
+                      const loading = requesting === key;
+                      return (
+                        <Button
+                          key={p.slug}
+                          className="w-full justify-start"
+                          size="sm"
+                          variant={done ? "secondary" : "outline"}
+                          disabled={done || loading}
+                          onClick={() => handleRequest(result, p)}
+                        >
+                          {loading ? (
+                            <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                          ) : done ? (
+                            <Check className="mr-2 h-3 w-3" />
+                          ) : (
+                            <Plus className="mr-2 h-3 w-3" />
+                          )}
+                          <span className="truncate">{p.name}</span>
+                        </Button>
+                      );
+                    })}
+                    <Button
+                      className="w-full"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setPickingPlatform(null)}
+                    >
+                      <X className="mr-2 h-3 w-3" />
+                      Cancel
+                    </Button>
+                  </div>
+                ) : result.platforms.length === 1 ? (
+                  <Button
+                    className="w-full"
+                    size="sm"
+                    disabled={requested.has(`${result.igdbId}-${result.platforms[0].slug}`) || requesting === `${result.igdbId}-${result.platforms[0].slug}`}
+                    onClick={() => handleRequest(result, result.platforms[0])}
+                  >
+                    {requested.has(`${result.igdbId}-${result.platforms[0].slug}`) ? (
+                      <>
+                        <Check className="mr-2 h-4 w-4" />
+                        Requested
+                      </>
+                    ) : requesting === `${result.igdbId}-${result.platforms[0].slug}` ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <>
+                        <Plus className="mr-2 h-4 w-4" />
+                        Request
+                      </>
+                    )}
+                  </Button>
+                ) : (
+                  <Button
+                    className="w-full"
+                    size="sm"
+                    onClick={() => setPickingPlatform(result.igdbId)}
+                  >
+                    <Plus className="mr-2 h-4 w-4" />
+                    Request ({result.platforms.length} platforms)
+                  </Button>
+                )}
               </CardContent>
             </Card>
           ))}

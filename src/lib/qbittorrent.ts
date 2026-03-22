@@ -220,7 +220,7 @@ export class QBittorrentClient {
     await this.login();
 
     const formData = new FormData();
-    const blob = new Blob([torrentFile], { type: "application/x-bittorrent" });
+    const blob = new Blob([new Uint8Array(torrentFile)], { type: "application/x-bittorrent" });
     formData.append("torrents", blob, filename);
     if (options?.savepath) formData.append("savepath", options.savepath);
     if (options?.category) formData.append("category", options.category);

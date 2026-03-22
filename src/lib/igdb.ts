@@ -7,6 +7,8 @@ interface IGDBGame {
   cover?: { image_id: string };
   first_release_date?: number;
   total_rating?: number;
+  total_rating_count?: number;
+  category?: number;
   platforms?: { id: number; name: string; slug: string }[];
 }
 
@@ -48,7 +50,7 @@ async function getAccessToken(
 
 export async function searchGames(
   query: string,
-  limit = 20
+  limit = 50
 ): Promise<GameSearchResult[]> {
   const settings = await prisma.settings.findUnique({ where: { id: 1 } });
   if (!settings?.igdbClientId || !settings?.igdbClientSecret) {
@@ -60,23 +62,40 @@ export async function searchGames(
     settings.igdbClientSecret
   );
 
-  const response = await fetch("https://api.igdb.com/v4/games", {
+  const headers = {
+    "Client-ID": settings.igdbClientId,
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "text/plain",
+  };
+
+  const fields = "name, summary, cover.image_id, first_release_date, total_rating, total_rating_count, category, platforms.name, platforms.slug";
+
+  // Use IGDB's "search" endpoint — it ranks by relevance so official games come first
+  const searchResponse = await fetch("https://api.igdb.com/v4/games", {
     method: "POST",
-    headers: {
-      "Client-ID": settings.igdbClientId,
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "text/plain",
-    },
-    body: `search "${query}"; fields name, summary, cover.image_id, first_release_date, total_rating, platforms.name, platforms.slug; limit ${limit};`,
+    headers,
+    body: `search "${query}"; fields ${fields}; limit ${limit};`,
   });
 
-  if (!response.ok) {
-    throw new Error(`IGDB API error: ${response.status}`);
+  if (!searchResponse.ok) {
+    throw new Error(`IGDB API error: ${searchResponse.status}`);
   }
 
-  const games: IGDBGame[] = await response.json();
+  const allGames: IGDBGame[] = await searchResponse.json();
 
-  return games.map((game) => ({
+  // Sort: games with the most ratings first (well-known official games),
+  // then by rating score, then alphabetically
+  allGames.sort((a, b) => {
+    const aCount = a.total_rating_count ?? 0;
+    const bCount = b.total_rating_count ?? 0;
+    if (aCount !== bCount) return bCount - aCount;
+    const aRating = a.total_rating ?? 0;
+    const bRating = b.total_rating ?? 0;
+    if (aRating !== bRating) return bRating - aRating;
+    return a.name.localeCompare(b.name);
+  });
+
+  return allGames.map((game) => ({
     igdbId: game.id,
     name: game.name,
     summary: game.summary ?? null,

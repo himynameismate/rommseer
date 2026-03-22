@@ -29,270 +29,244 @@ export interface ProwlarrIndexer {
   categories: { id: number; name: string; subCategories?: { id: number; name: string }[] }[];
 }
 
-export interface SearchOptions {
-  query: string;
-  categories?: number[];
-  indexerIds?: number[];
-  limit?: number;
-}
-
-export interface AutoGrabConfig {
-  enabled: boolean;
-  searchTemplate: string;
-  minSeeders: number;
-  maxSizeMb: number;
-  preferredIndexers: string;
-}
-
-// Prowlarr category IDs for games/ROMs
-export const GAME_CATEGORIES = [
-  1000, // Console (general)
-  1010, // Console/NDS
-  1020, // Console/PSP
-  1030, // Console/Wii
-  1040, // Console/XBox
-  1050, // Console/XBox 360
-  1060, // Console/WiiWare/VC
-  1070, // Console/XBox 360 DLC
-  1080, // Console/PS3
-  1090, // Console/Other
-  1110, // Console/3DS
-  1120, // Console/PS Vita
-  1130, // Console/WiiU
-  1140, // Console/XBox One
-  1180, // Console/PS4
-  4000, // PC (general)
-  4050, // PC/Games
+const GAME_CATEGORIES = [
+  1000, 1010, 1020, 1030, 1040, 1050, 1060, 1070, 1080, 1090,
+  1110, 1120, 1130, 1140, 1180, 4000, 4050,
 ];
 
-export class ProwlarrClient {
-  private baseUrl: string;
-  private apiKey: string;
+const stripAccents = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+const validUrl = (u: string | null, ...schemes: string[]) => u ? schemes.some((s) => u.startsWith(s)) : false;
 
-  constructor(baseUrl: string, apiKey: string) {
+// File extensions that are NEVER ROMs — reject results containing these in the title
+const BLOCKED_EXTENSIONS = [
+  ".epub", ".pdf", ".mobi", ".azw", ".djvu", ".cbr", ".cbz", // books/comics
+  ".mp3", ".flac", ".ogg", ".aac", ".wav", ".m4a", // audio
+  ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", // video
+  ".exe", ".msi", ".dmg", ".pkg", ".deb", ".rpm", ".apk", // installers
+  ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", // documents
+  ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".svg", ".tiff", // images
+];
+
+// Valid ROM/game extensions per platform (lowercase). If a platform isn't listed, no extension filter is applied.
+const PLATFORM_EXTENSIONS: Record<string, string[]> = {
+  // Nintendo - Handhelds
+  "game boy": [".gb"],
+  "game boy color": [".gbc", ".gb"],
+  "game boy advance": [".gba"],
+  "nintendo ds": [".nds", ".dsi", ".srl"],
+  "nintendo dsi": [".nds", ".dsi", ".srl"],
+  "nintendo 3ds": [".3ds", ".cia", ".cxi", ".cci"],
+  "new nintendo 3ds": [".3ds", ".cia", ".cxi", ".cci"],
+  // Nintendo - Home Consoles
+  "nintendo entertainment system": [".nes", ".unf", ".unif", ".fds"],
+  "nes": [".nes", ".unf", ".unif", ".fds"],
+  "famicom": [".nes", ".unf", ".unif", ".fds"],
+  "family computer": [".nes", ".unf", ".unif", ".fds"],
+  "famicom disk system": [".fds", ".nes"],
+  "super nintendo entertainment system": [".sfc", ".smc", ".fig", ".swc"],
+  "super nintendo": [".sfc", ".smc", ".fig", ".swc"],
+  "snes": [".sfc", ".smc", ".fig", ".swc"],
+  "super famicom": [".sfc", ".smc", ".fig", ".swc"],
+  "nintendo 64": [".n64", ".z64", ".v64", ".ndd"],
+  "nintendo 64dd": [".n64", ".z64", ".v64", ".ndd"],
+  "gamecube": [".iso", ".gcm", ".gcz", ".rvz", ".nkit", ".ciso"],
+  "nintendo gamecube": [".iso", ".gcm", ".gcz", ".rvz", ".nkit", ".ciso"],
+  "wii": [".iso", ".wbfs", ".rvz", ".nkit", ".wad", ".ciso"],
+  "wii u": [".wud", ".wux", ".rpx", ".wua", ".iso"],
+  "nintendo switch": [".nsp", ".xci", ".nsz", ".xcz"],
+  // Nintendo - Other
+  "virtual boy": [".vb", ".vboy"],
+  "pokémon mini": [".min"],
+  "game & watch": [".mgw"],
+  // Sony
+  "playstation": [".bin", ".cue", ".iso", ".img", ".pbp", ".chd"],
+  "playstation 2": [".iso", ".bin", ".chd"],
+  "playstation 3": [".iso", ".pkg"],
+  "playstation portable": [".iso", ".cso", ".pbp"],
+  "playstation vita": [".vpk", ".mai"],
+  // Sega
+  "sega master system": [".sms"],
+  "sega mega drive/genesis": [".md", ".gen", ".bin", ".smd"],
+  "genesis": [".md", ".gen", ".bin", ".smd"],
+  "mega drive": [".md", ".gen", ".bin", ".smd"],
+  "sega saturn": [".iso", ".bin", ".cue", ".chd"],
+  "dreamcast": [".gdi", ".cdi", ".chd"],
+  "game gear": [".gg"],
+  // Other
+  "xbox": [".iso", ".xiso"],
+  "xbox 360": [".iso", ".xex"],
+  "neo geo": [".neo"],
+  "turbografx-16": [".pce"],
+  "atari 2600": [".a26", ".bin"],
+  "arcade": [".zip", ".7z"],
+  "mame": [".zip", ".7z"],
+  // PC
+  "pc (microsoft windows)": [".iso", ".zip", ".7z", ".rar", ".exe"],
+};
+
+/** Check if a result title contains a blocked (non-ROM) file extension */
+function hasBlockedExtension(title: string): boolean {
+  const lower = title.toLowerCase();
+  return BLOCKED_EXTENSIONS.some((ext) => lower.includes(ext));
+}
+
+// All valid ROM extensions across ALL platforms — used to detect if a title mentions any ROM format
+const ALL_ROM_EXTENSIONS = [...new Set(Object.values(PLATFORM_EXTENSIONS).flat())];
+
+/** Check if a result title is compatible with the target platform's ROM extensions */
+function matchesPlatformExtensions(title: string, platformName?: string): boolean {
+  if (!platformName) return true;
+  const exts = PLATFORM_EXTENSIONS[platformName.toLowerCase()];
+  if (!exts) return true; // Unknown platform, no filtering
+
+  const lower = title.toLowerCase();
+
+  // If title contains a valid extension for THIS platform, it's a match
+  if (exts.some((ext) => lower.includes(ext))) return true;
+
+  // If title contains generic archive extensions, allow (ROM packs use these)
+  if ([".zip", ".7z", ".rar"].some((ext) => lower.includes(ext))) return true;
+
+  // If title contains a ROM extension for a DIFFERENT platform, block it
+  const hasOtherRomExt = ALL_ROM_EXTENSIONS.some((ext) => lower.includes(ext) && !exts.includes(ext));
+  if (hasOtherRomExt) return false;
+
+  // No ROM extension detected at all — allow it (most titles don't include extensions)
+  return true;
+}
+
+/** Check if a result title is relevant to the game we're searching for */
+function isTitleRelevant(title: string, gameName: string): boolean {
+  const normalize = (s: string) => stripAccents(s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim());
+  const t = normalize(title);
+  const clean = gameName.split(":")[0].trim();
+  const simple = clean.replace(/\s*(Version|Edition|Special)\s*/gi, " ").replace(/\s+/g, " ").trim();
+
+  // Build normalized name variants
+  const names = [...new Set([gameName, clean, simple].map(normalize))].filter(Boolean);
+
+  // Title must contain the game name as a contiguous phrase (not scattered words)
+  // e.g., "Advance Wars" must appear as "advance wars" in the title, not "advance...wars" separately
+  return names.some((name) => t.includes(name));
+}
+
+export class ProwlarrClient {
+  constructor(private baseUrl: string, private apiKey: string) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
-    this.apiKey = apiKey;
   }
 
-  private async fetch<T>(
-    endpoint: string,
-    options?: RequestInit
-  ): Promise<T> {
-    const url = `${this.baseUrl}/api/v1${endpoint}`;
-    const headers: Record<string, string> = {
-      "X-Api-Key": this.apiKey,
-      "Content-Type": "application/json",
-      ...((options?.headers as Record<string, string>) || {}),
-    };
-
-    const response = await fetch(url, {
+  private async fetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
+    const res = await fetch(`${this.baseUrl}/api/v1${endpoint}`, {
       ...options,
-      headers,
+      headers: { "X-Api-Key": this.apiKey, "Content-Type": "application/json", ...((options?.headers as Record<string, string>) || {}) },
     });
-
-    if (!response.ok) {
-      throw new Error(
-        `Prowlarr API error: ${response.status} ${response.statusText}`
-      );
-    }
-
-    return response.json();
+    if (!res.ok) throw new Error(`Prowlarr API error: ${res.status} ${res.statusText}`);
+    return res.json();
   }
 
   async testConnection(): Promise<boolean> {
-    try {
-      await this.fetch<{ version: string }>("/system/status");
-      return true;
-    } catch (error) {
-      console.error("Prowlarr connection test failed:", error);
-      return false;
-    }
+    try { await this.fetch("/system/status"); return true; }
+    catch { return false; }
   }
 
   async getIndexers(): Promise<ProwlarrIndexer[]> {
-    return this.fetch<ProwlarrIndexer[]>("/indexer");
+    return this.fetch("/indexer");
   }
 
-  async search(options: SearchOptions): Promise<ProwlarrRelease[]> {
-    const params = new URLSearchParams();
-    params.set("query", options.query);
-    params.set("type", "search");
-
-    if (options.categories && options.categories.length > 0) {
-      options.categories.forEach((cat) => params.append("categories", String(cat)));
-    }
-
-    if (options.indexerIds && options.indexerIds.length > 0) {
-      options.indexerIds.forEach((id) => params.append("indexerIds", String(id)));
-    }
-
-    if (options.limit) {
-      params.set("limit", String(options.limit));
-    }
-
-    return this.fetch<ProwlarrRelease[]>(`/search?${params.toString()}`);
+  async search(query: string, categories?: number[], limit = 50): Promise<ProwlarrRelease[]> {
+    const p = new URLSearchParams({ query, type: "search", limit: String(limit) });
+    categories?.forEach((c) => p.append("categories", String(c)));
+    return this.fetch(`/search?${p}`);
   }
 
-  /**
-   * Search for a game ROM and return results sorted by best match.
-   * Sorts by: seeders (desc), then size (asc for ROMs — smaller is often better).
-   */
-  async searchForRom(
-    gameName: string,
-    platformName?: string,
-    searchTemplate?: string,
-    minSeeders = 0,
-    maxSizeMb = 0
-  ): Promise<ProwlarrRelease[]> {
-    // Build multiple search queries from most specific to least specific
-    const queries: string[] = [];
+  /** Search with progressive query simplification, returns filtered+sorted results. */
+  async searchForRom(gameName: string, platformName?: string, searchTemplate?: string, minSeeders = 0, maxSizeMb = 0): Promise<ProwlarrRelease[]> {
+    const queries = this.buildQueries(gameName, platformName, searchTemplate);
+    const seen = new Set<string>();
+    const all: ProwlarrRelease[] = [];
 
-    // Clean the game name — remove subtitles after colon for broader matches
-    const cleanName = gameName.split(":")[0].trim();
-
-    // 1. Use template if provided
-    if (searchTemplate) {
-      queries.push(
-        searchTemplate
-          .replace("{game_name}", gameName)
-          .replace("{platform}", platformName || "")
-          .trim()
-      );
-    }
-
-    // 2. Full name + platform
-    if (platformName) {
-      queries.push(`${gameName} ${platformName}`);
-    }
-
-    // 3. Full game name only
-    queries.push(gameName);
-
-    // 4. Cleaned name (before colon) + platform
-    if (cleanName !== gameName && platformName) {
-      queries.push(`${cleanName} ${platformName}`);
-    }
-
-    // 5. Cleaned name only
-    if (cleanName !== gameName) {
-      queries.push(cleanName);
-    }
-
-    // Deduplicate queries
-    const uniqueQueries = [...new Set(queries)];
-
-    let results: ProwlarrRelease[] = [];
-
-    for (const query of uniqueQueries) {
-      // Try with game categories first
-      results = await this.search({
-        query,
-        categories: GAME_CATEGORIES,
-        limit: 50,
-      });
-
-      console.log(`[Prowlarr] Search "${query}" with game categories: ${results.length} raw results`);
-
-      // If no results, try without category filter
-      if (results.length === 0) {
-        results = await this.search({
-          query,
-          limit: 50,
-        });
-        console.log(`[Prowlarr] Search "${query}" without categories: ${results.length} raw results`);
+    for (const q of queries) {
+      const [cat, noCat] = await Promise.all([
+        this.search(q, GAME_CATEGORIES),
+        this.search(q),
+      ]);
+      let added = 0;
+      for (const r of [...cat, ...noCat]) {
+        const key = r.guid || `${r.title}-${r.indexer}-${r.size}`;
+        if (!seen.has(key)) { seen.add(key); all.push(r); added++; }
       }
+      console.log(`[Prowlarr] "${q}": ${cat.length}+${noCat.length} raw, ${added} new (${all.length} total)`);
+    }
 
-      if (results.length > 0) {
-        console.log(`[Prowlarr] Found results with query "${query}"`);
-        if (results[0]) {
-          console.log(`[Prowlarr] First result: title="${results[0].title}", protocol="${results[0].protocol}", seeders=${results[0].seeders}, downloadUrl=${!!results[0].downloadUrl}, magnetUrl=${!!results[0].magnetUrl}`);
-        }
-        break;
+    const maxSize = maxSizeMb > 0 ? maxSizeMb * 1024 * 1024 : Infinity;
+    const filtered = all.filter((r) => {
+      if (!validUrl(r.downloadUrl, "http://", "https://") && !validUrl(r.magnetUrl, "magnet:", "http")) return false;
+      if (r.protocol !== "usenet" && minSeeders > 0 && (r.seeders ?? 0) < minSeeders) return false;
+      if (r.size > maxSize) return false;
+      // Title must actually contain the game name
+      if (!isTitleRelevant(r.title, gameName)) {
+        console.log(`[Prowlarr] BLOCKED "${r.title}": not relevant to "${gameName}"`);
+        return false;
       }
-    }
-
-    if (results.length === 0) {
-      console.log(`[Prowlarr] No results found after trying ${uniqueQueries.length} queries`);
-    }
-
-    // Filter results
-    let filtered = results.filter((r) => {
-      // Must have a download URL or magnet URL
-      if (!r.downloadUrl && !r.magnetUrl) return false;
-
-      // Filter out usenet results (keep torrent and unknown protocols)
-      if (r.protocol === "usenet") return false;
-
-      // Minimum seeders filter
-      if (minSeeders > 0 && (r.seeders ?? 0) < minSeeders) return false;
-
-      // Max size filter (in MB)
-      if (maxSizeMb > 0 && r.size > maxSizeMb * 1024 * 1024) return false;
-
+      // Block results with non-ROM file extensions (ebooks, videos, etc.)
+      if (hasBlockedExtension(r.title)) {
+        console.log(`[Prowlarr] BLOCKED "${r.title}": non-ROM file extension`);
+        return false;
+      }
+      // Check platform-specific extensions
+      if (!matchesPlatformExtensions(r.title, platformName)) {
+        console.log(`[Prowlarr] BLOCKED "${r.title}": wrong extension for ${platformName}`);
+        return false;
+      }
       return true;
     });
 
-    console.log(`[Prowlarr] After filtering: ${filtered.length} results (from ${results.length} raw)`);
-
-    // Sort: most seeders first, then smallest size
     filtered.sort((a, b) => {
-      const seedDiff = (b.seeders ?? 0) - (a.seeders ?? 0);
-      if (seedDiff !== 0) return seedDiff;
-      return a.size - b.size;
+      const score = (r: ProwlarrRelease) => r.protocol === "usenet" ? (r.grabs ?? 0) : (r.seeders ?? 0);
+      return score(b) - score(a) || a.size - b.size;
     });
 
+    console.log(`[Prowlarr] ${all.length} total → ${filtered.length} after filter/sort`);
     return filtered;
   }
 
-  /**
-   * Auto-grab: search for a ROM and return the best result.
-   * Returns null if no suitable result found.
-   */
-  async autoGrab(
-    gameName: string,
-    platformName?: string,
-    config?: Partial<AutoGrabConfig>
-  ): Promise<ProwlarrRelease | null> {
-    const results = await this.searchForRom(
-      gameName,
-      platformName,
-      config?.searchTemplate,
-      config?.minSeeders ?? 1,
-      config?.maxSizeMb ?? 0
-    );
+  private buildQueries(name: string, platform?: string, template?: string): string[] {
+    const q: string[] = [];
+    const clean = name.split(":")[0].trim();
+    const simple = clean.replace(/\s*(Version|Edition|Special)\s*/gi, " ").replace(/\s+/g, " ").trim();
+    const ascii = stripAccents(simple || clean);
 
-    if (results.length === 0) return null;
+    if (template) q.push(template.replace("{game_name}", name).replace("{platform}", platform || "").trim());
+    if (platform) q.push(`${name} ${platform}`);
+    q.push(name);
+    if (clean !== name) { if (platform) q.push(`${clean} ${platform}`); q.push(clean); }
+    if (simple !== clean) { if (platform) q.push(`${simple} ${platform}`); q.push(simple); }
+    if (ascii !== (simple || clean)) { if (platform) q.push(`${ascii} ${platform}`); q.push(ascii); }
 
-    // If preferred indexers are set, try to find a result from them first
-    if (config?.preferredIndexers) {
-      const preferred = config.preferredIndexers
-        .split(",")
-        .map((s) => s.trim().toLowerCase())
-        .filter(Boolean);
+    return [...new Set(q)];
+  }
 
-      if (preferred.length > 0) {
-        const preferredResult = results.find((r) =>
-          preferred.includes(r.indexer.toLowerCase())
-        );
-        if (preferredResult) return preferredResult;
-      }
+  /** Download a .torrent/.nzb file through Prowlarr (handles indexer auth). */
+  async downloadFile(downloadUrl: string): Promise<Buffer | null> {
+    try {
+      const res = await fetch(downloadUrl, { headers: { "X-Api-Key": this.apiKey }, redirect: "follow" });
+      if (!res.ok) return null;
+      return Buffer.from(await res.arrayBuffer());
+    } catch (e) {
+      console.error("[Prowlarr] Download error:", e instanceof Error ? e.message : e);
+      return null;
     }
-
-    // Return the best result (most seeders)
-    return results[0];
   }
 }
 
 export async function getProwlarrClient(): Promise<ProwlarrClient | null> {
-  const settings = await prisma.settings.findUnique({ where: { id: 1 } });
-  if (!settings?.prowlarrUrl || !settings?.prowlarrApiKey) return null;
-  return new ProwlarrClient(settings.prowlarrUrl, settings.prowlarrApiKey);
+  const s = await prisma.settings.findUnique({ where: { id: 1 } });
+  return s?.prowlarrUrl && s?.prowlarrApiKey ? new ProwlarrClient(s.prowlarrUrl, s.prowlarrApiKey) : null;
 }
 
 export function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB", "TB"];
+  const k = 1024, sizes = ["B", "KB", "MB", "GB", "TB"];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
 }
