@@ -5,7 +5,7 @@ FROM base AS deps
 WORKDIR /app
 COPY package.json package-lock.json* .npmrc* ./
 COPY prisma ./prisma/
-RUN npm ci
+RUN npm ci || npm install --legacy-peer-deps
 
 # Build
 FROM base AS builder
