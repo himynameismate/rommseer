@@ -1,6 +1,6 @@
 # Rommseer
 
-A self-hosted ROM request management tool — like [Seerr](https://github.com/seerr-app/seerr) but for game ROMs. Integrates with [RomM](https://github.com/rommapp/romm), [Prowlarr](https://github.com/Prowlarr/Prowlarr), and [qBittorrent](https://github.com/qbittorrent/qBittorrent) to provide a complete request-to-download pipeline.
+A self-hosted ROM request management tool — like [Seerr](https://github.com/seerr-app/seerr) but for game ROMs. Integrates with [RomM](https://github.com/rommapp/romm), [Prowlarr](https://github.com/Prowlarr/Prowlarr), [qBittorrent](https://github.com/qbittorrent/qBittorrent), and [SABnzbd](https://sabnzbd.org/) to provide a complete request-to-download pipeline.
 
 ![Next.js](https://img.shields.io/badge/Next.js-15-black?logo=next.js)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)
@@ -10,11 +10,12 @@ A self-hosted ROM request management tool — like [Seerr](https://github.com/se
 ## How It Works
 
 1. **Users discover games** via IGDB and submit requests
-2. **Admins approve** requests — Prowlarr auto-searches indexers for the best torrent
-3. **qBittorrent downloads** the ROM automatically
-4. **RomM syncs** the new ROM into your library
+2. **Admins approve** requests (or auto-approve) — Prowlarr auto-searches indexers
+3. **Download client grabs** the ROM (qBittorrent for torrents, SABnzbd for usenet)
+4. **Rommseer copies** the completed ROM into your RomM library directory
+5. **RomM scans** and imports the new ROM automatically
 
-One click from the admin. Fully automated.
+Zero clicks with auto-approve. Fully automated end-to-end.
 
 ## Features
 
@@ -24,10 +25,19 @@ One click from the admin. Fully automated.
   - Configurable search templates (`{game_name} {platform} ROM`)
   - Minimum seeders and max size filters
   - Preferred indexers prioritization
+  - Title relevance filtering (blocks unrelated results like ebooks, music)
+  - Platform-aware ROM extension filtering (e.g. GBA requests only grab `.gba` files)
   - Manual search fallback with result browsing
 - **qBittorrent Integration** — Sends torrents directly to qBittorrent with custom categories, tags, and save paths
-- **RomM Integration** — Connects to your RomM instance to check library status
+- **SABnzbd Integration** — Sends NZBs to SABnzbd for usenet downloads with category support
+- **RomM Integration** — Full lifecycle integration:
+  - Copies completed ROMs to your RomM library directory (platform-aware folder structure)
+  - Triggers a library scan via Socket.IO after copying
+  - Connects to check library status
+- **Auto-Retry** — If a download fails, automatically tries the next best result (up to 3 attempts)
+- **Auto-Approve** — Optionally skip admin approval for new requests
 - **Manual Override** — Paste magnet links directly if auto-grab doesn't find what you need
+- **Multi-Platform Support** — Platform picker for games available on multiple platforms
 - **Role-Based Access** — Admin and user roles with separate permissions
 - **Docker Ready** — Single container deployment, perfect for Unraid/NAS setups
 
@@ -48,11 +58,23 @@ services:
       - NEXTAUTH_SECRET=your-random-secret-here
     volumes:
       - rommseer_data:/app/data
+      # Mount the RomM library so Rommseer can copy completed ROMs into it.
+      # This must point to the same directory RomM uses as its library root.
+      # Then set "Library Path" in Settings > RomM to /romm/library
+      - /path/to/romm/library:/romm/library
+      # Mount the download client's completed-downloads folder so Rommseer
+      # can read finished files. Adjust to match your SABnzbd/qBittorrent config.
+      - /path/to/downloads:/downloads
     restart: unless-stopped
 
 volumes:
   rommseer_data:
 ```
+
+> **Important:** The volume mounts above are required for the post-download copy feature.
+> Rommseer needs read access to where your download client saves completed files, and
+> write access to your RomM library directory. After mounting, set the **Library Path**
+> in Settings > RomM to the container path (e.g. `/romm/library`).
 
 ```bash
 # Generate a secret
@@ -91,10 +113,11 @@ All configuration is done through the **Settings** page in the admin UI:
 
 | Service | What You Need |
 |---------|--------------|
-| **RomM** | URL, username, password |
+| **RomM** | URL, username, password, library path (container mount point) |
 | **IGDB** | Twitch Client ID & Secret ([get yours](https://dev.twitch.tv/console)) |
 | **Prowlarr** | URL, API key (Settings → General → API Key) |
 | **qBittorrent** | URL, username, password |
+| **SABnzbd** | URL, API key (Config → General → API Key) |
 
 ### Prowlarr Auto-Grab Settings
 
@@ -112,9 +135,12 @@ All configuration is done through the **Settings** page in the admin UI:
 3. Add container in Unraid Docker UI:
    - **Port:** 3000 → 3000
    - **Path:** `/app/data` → `/mnt/user/appdata/rommseer/data`
+   - **Path:** `/romm/library` → `/mnt/user/data/romm/library` (your RomM library root)
+   - **Path:** `/downloads` → `/mnt/user/data/downloads` (your download client's completed folder)
    - **Variable:** `NEXTAUTH_URL` = `http://YOUR_UNRAID_IP:3000`
    - **Variable:** `NEXTAUTH_SECRET` = (random secret)
    - **Variable:** `DATABASE_URL` = `file:/app/data/rommseer.db`
+4. In Settings → RomM, set **Library Path** to `/romm/library`
 
 ## Tech Stack
 
@@ -130,9 +156,11 @@ All configuration is done through the **Settings** page in the admin UI:
 ```
 User Request → IGDB Search → Game Database
                                     ↓
-Admin Approve → Prowlarr Search → Best Torrent
-                                    ↓
-                qBittorrent Download → RomM Library
+Admin Approve (or Auto) → Prowlarr Search → Best Result
+                                                ↓
+                              qBittorrent / SABnzbd Download
+                                                ↓
+                              Copy ROM to Library → RomM Scan → Available
 ```
 
 ## Contributing

@@ -10,6 +10,13 @@ services:
       - NEXTAUTH_SECRET=change-me-to-a-random-secret
     volumes:
       - rommseer_data:/app/data
+      # Mount the RomM library so Rommseer can copy completed ROMs into it.
+      # This must point to the same directory RomM uses as its library root.
+      # Set the "Library Path" in Settings → RomM to /romm/library
+      - /path/to/romm/library:/romm/library
+      # Mount the download client's completed-downloads folder so Rommseer
+      # can read finished files. Adjust to match your SABnzbd/qBittorrent config.
+      - /path/to/downloads:/downloads
     restart: unless-stopped
 
 volumes:
