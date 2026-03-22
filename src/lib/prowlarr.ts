@@ -111,7 +111,7 @@ function hasBlockedExtension(title: string): boolean {
 }
 
 // All valid ROM extensions across ALL platforms — used to detect if a title mentions any ROM format
-const ALL_ROM_EXTENSIONS = [...new Set(Object.values(PLATFORM_EXTENSIONS).flat())];
+const ALL_ROM_EXTENSIONS = Array.from(new Set(Object.values(PLATFORM_EXTENSIONS).flat()));
 
 /** Check if a result title is compatible with the target platform's ROM extensions */
 function matchesPlatformExtensions(title: string, platformName?: string): boolean {
@@ -143,7 +143,7 @@ function isTitleRelevant(title: string, gameName: string): boolean {
   const simple = clean.replace(/\s*(Version|Edition|Special)\s*/gi, " ").replace(/\s+/g, " ").trim();
 
   // Build normalized name variants
-  const names = [...new Set([gameName, clean, simple].map(normalize))].filter(Boolean);
+  const names = Array.from(new Set([gameName, clean, simple].map(normalize))).filter(Boolean);
 
   // Title must contain the game name as a contiguous phrase (not scattered words)
   // e.g., "Advance Wars" must appear as "advance wars" in the title, not "advance...wars" separately
@@ -243,7 +243,7 @@ export class ProwlarrClient {
     if (simple !== clean) { if (platform) q.push(`${simple} ${platform}`); q.push(simple); }
     if (ascii !== (simple || clean)) { if (platform) q.push(`${ascii} ${platform}`); q.push(ascii); }
 
-    return [...new Set(q)];
+    return Array.from(new Set(q));
   }
 
   /** Download a .torrent/.nzb file through Prowlarr (handles indexer auth). */

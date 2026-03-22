@@ -37,6 +37,7 @@ export async function GET() {
       sabnzbdApiKey: "",
       sabnzbdCategory: "rommseer",
       autoApprove: false,
+      rommLibraryPath: "",
       initialized: false,
     });
   }
@@ -80,6 +81,7 @@ export async function PUT(req: NextRequest) {
     sabnzbdApiKey,
     sabnzbdCategory,
     autoApprove,
+    rommLibraryPath,
   } = body;
 
   const data: Record<string, unknown> = { initialized: true };
@@ -121,6 +123,7 @@ export async function PUT(req: NextRequest) {
     data.sabnzbdApiKey = sabnzbdApiKey;
   if (sabnzbdCategory !== undefined) data.sabnzbdCategory = sabnzbdCategory;
   if (autoApprove !== undefined) data.autoApprove = autoApprove;
+  if (rommLibraryPath !== undefined) data.rommLibraryPath = rommLibraryPath;
 
   const settings = await prisma.settings.upsert({
     where: { id: 1 },
@@ -148,6 +151,7 @@ export async function PUT(req: NextRequest) {
       sabnzbdApiKey: sabnzbdApiKey ?? "",
       sabnzbdCategory: sabnzbdCategory ?? "rommseer",
       autoApprove: autoApprove ?? false,
+      rommLibraryPath: rommLibraryPath ?? "",
       initialized: true,
     },
     update: data,

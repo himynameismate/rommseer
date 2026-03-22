@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { io } from "socket.io-client";
 
 interface RomMPlatform {
   id: number;
@@ -28,6 +29,7 @@ export class RomMClient {
   private username: string;
   private password: string;
   private sessionCookie: string | null = null;
+  private csrfToken: string | null = null;
 
   constructor(baseUrl: string, username: string, password: string) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
@@ -38,99 +40,109 @@ export class RomMClient {
   private async login(): Promise<void> {
     if (this.sessionCookie) return;
 
-    // RomM uses HTTP Basic Authentication for /api/login
     const basicAuth = Buffer.from(`${this.username}:${this.password}`).toString("base64");
 
     const response = await fetch(`${this.baseUrl}/api/login`, {
       method: "POST",
-      headers: {
-        "Authorization": `Basic ${basicAuth}`,
-      },
+      headers: { "Authorization": `Basic ${basicAuth}` },
       redirect: "manual",
     });
 
-    // Extract session cookie from response headers
-    const setCookie = response.headers.get("set-cookie");
-    if (setCookie) {
-      // Parse the cookie name=value part
-      const cookiePart = setCookie.split(";")[0];
-      this.sessionCookie = cookiePart;
+    // Extract session cookie
+    const cookies: string[] = [];
+    response.headers.forEach((value, key) => {
+      if (key.toLowerCase() === "set-cookie") {
+        cookies.push(value.split(";")[0]);
+      }
+    });
+
+    const sessionCookie = cookies.find((c) => c.startsWith("romm_session="));
+    if (sessionCookie) {
+      this.sessionCookie = sessionCookie;
+    } else if (cookies.length > 0) {
+      this.sessionCookie = cookies[0];
     }
 
     if (!this.sessionCookie) {
-      // If no cookie, check if we got a redirect (302) which is common for successful login
-      if (response.status === 302 || response.status === 301) {
-        // Try to get cookie from redirect response
-        const allHeaders = response.headers;
-        const cookies: string[] = [];
-        allHeaders.forEach((value, key) => {
-          if (key.toLowerCase() === "set-cookie") {
-            cookies.push(value.split(";")[0]);
-          }
-        });
-        if (cookies.length > 0) {
-          this.sessionCookie = cookies.join("; ");
-        }
-      }
+      throw new Error(`RomM login failed: ${response.status} ${response.statusText}`);
+    }
 
-      if (!this.sessionCookie) {
-        throw new Error(
-          `RomM login failed: ${response.status} ${response.statusText}`
-        );
-      }
+    // Fetch CSRF token from heartbeat endpoint
+    await this.refreshCsrfToken();
+  }
+
+  /** Get a fresh CSRF token from RomM's heartbeat endpoint. */
+  private async refreshCsrfToken(): Promise<void> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/heartbeat`, {
+        headers: { Cookie: this.sessionCookie || "" },
+      });
+      res.headers.forEach((value, key) => {
+        if (key.toLowerCase() === "set-cookie" && value.includes("csrftoken")) {
+          const cookiePart = value.split(";")[0]; // romm_csrftoken=...
+          this.csrfToken = cookiePart.split("=").slice(1).join("=");
+        }
+      });
+    } catch (e) {
+      console.error("[RomM] Failed to get CSRF token:", e instanceof Error ? e.message : e);
     }
   }
 
+  /** Build Cookie header string including session + CSRF cookies. */
+  private getCookieHeader(): string {
+    const parts = [this.sessionCookie];
+    if (this.csrfToken) parts.push(`romm_csrftoken=${this.csrfToken}`);
+    return parts.filter(Boolean).join("; ");
+  }
+
   private async fetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
-    // Ensure we're logged in
     await this.login();
 
     const url = `${this.baseUrl}/api${endpoint}`;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
+      Cookie: this.getCookieHeader(),
     };
 
-    if (this.sessionCookie) {
-      headers["Cookie"] = this.sessionCookie;
+    // Include CSRF token header for mutating requests
+    const method = (options?.method || "GET").toUpperCase();
+    if (method !== "GET" && method !== "HEAD" && this.csrfToken) {
+      headers["X-CSRFToken"] = this.csrfToken;
     }
 
     const response = await fetch(url, {
       ...options,
-      headers: { ...headers, ...options?.headers },
+      headers: { ...headers, ...((options?.headers as Record<string, string>) || {}) },
     });
 
-    // If we got a 401/403, clear session and retry once
+    // On 401/403, re-login and retry once
     if (response.status === 401 || response.status === 403) {
       this.sessionCookie = null;
+      this.csrfToken = null;
       await this.login();
 
       const retryHeaders: Record<string, string> = {
         "Content-Type": "application/json",
+        Cookie: this.getCookieHeader(),
       };
-      if (this.sessionCookie) {
-        retryHeaders["Cookie"] = this.sessionCookie;
+      if (method !== "GET" && method !== "HEAD" && this.csrfToken) {
+        retryHeaders["X-CSRFToken"] = this.csrfToken;
       }
 
       const retryResponse = await fetch(url, {
         ...options,
-        headers: { ...retryHeaders, ...options?.headers },
+        headers: { ...retryHeaders, ...((options?.headers as Record<string, string>) || {}) },
       });
 
       if (!retryResponse.ok) {
-        throw new Error(
-          `RomM API error: ${retryResponse.status} ${retryResponse.statusText}`
-        );
+        throw new Error(`RomM API error: ${retryResponse.status} ${retryResponse.statusText}`);
       }
-
       return retryResponse.json();
     }
 
     if (!response.ok) {
-      throw new Error(
-        `RomM API error: ${response.status} ${response.statusText}`
-      );
+      throw new Error(`RomM API error: ${response.status} ${response.statusText}`);
     }
-
     return response.json();
   }
 
@@ -148,14 +160,10 @@ export class RomMClient {
     return this.fetch<RomMPlatform[]>("/platforms");
   }
 
-  async getRoms(
-    platformId?: number,
-    search?: string
-  ): Promise<RomMRom[]> {
+  async getRoms(platformId?: number, search?: string): Promise<RomMRom[]> {
     const params = new URLSearchParams();
     if (platformId) params.set("platform_id", String(platformId));
     if (search) params.set("search_term", search);
-
     const query = params.toString();
     return this.fetch<RomMRom[]>(`/roms${query ? `?${query}` : ""}`);
   }
@@ -164,29 +172,83 @@ export class RomMClient {
     return this.fetch<RomMRom>(`/roms/${id}`);
   }
 
+  /**
+   * Trigger a library scan in RomM via Socket.IO.
+   * RomM uses websocket events (not REST) to trigger scans.
+   * @param platformIds - Optional list of platform IDs to scan. Empty = scan all.
+   * @param scanType - "quick" (default) or "complete"
+   */
+  async triggerScan(platformIds: number[] = [], scanType: "quick" | "complete" = "quick"): Promise<void> {
+    await this.login();
+
+    return new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        socket.disconnect();
+        // Scan was emitted, just resolve even if we didn't get confirmation
+        console.log(`[RomM] Scan emit timed out waiting for response, scan likely started`);
+        resolve();
+      }, 10_000);
+
+      const socket = io(this.baseUrl, {
+        path: "/ws/socket.io/",
+        transports: ["polling", "websocket"],
+        extraHeaders: {
+          Cookie: this.getCookieHeader(),
+        },
+        withCredentials: true,
+        timeout: 10_000,
+      });
+
+      socket.on("connect", () => {
+        console.log(`[RomM] Socket connected, emitting scan event (type=${scanType}, platforms=${platformIds.join(",")||"all"})`);
+        socket.emit("scan", {
+          platforms: platformIds,
+          type: scanType,
+          roms_ids: [],
+          apis: ["igdb"],
+          launchbox_remote_enabled: true,
+        });
+
+        // Give RomM a moment to acknowledge, then disconnect
+        setTimeout(() => {
+          clearTimeout(timeout);
+          socket.disconnect();
+          console.log(`[RomM] Scan triggered successfully`);
+          resolve();
+        }, 2000);
+      });
+
+      socket.on("scan:done", () => {
+        clearTimeout(timeout);
+        socket.disconnect();
+        console.log(`[RomM] Scan completed`);
+        resolve();
+      });
+
+      socket.on("connect_error", (err) => {
+        clearTimeout(timeout);
+        socket.disconnect();
+        console.error(`[RomM] Socket connection error:`, err.message);
+        reject(new Error(`RomM socket connection failed: ${err.message}`));
+      });
+    });
+  }
+
   /** Trigger a scan of a specific platform in RomM. */
   async scanPlatform(platformId: number): Promise<void> {
     try {
-      await this.fetch(`/platforms/${platformId}/roms/scan`, { method: "PUT" });
-      console.log(`[RomM] Scan triggered for platform ${platformId}`);
+      await this.triggerScan([platformId], "quick");
     } catch (e) {
-      // Some RomM versions use different scan endpoints, try alternatives
-      try {
-        await this.fetch(`/raw/scan`, { method: "PUT" });
-        console.log(`[RomM] Full library scan triggered (fallback)`);
-      } catch (e2) {
-        console.error(`[RomM] Scan failed:`, e2 instanceof Error ? e2.message : e2);
-      }
+      console.error(`[RomM] Platform scan failed:`, e instanceof Error ? e.message : e);
     }
   }
 
   /** Trigger a full library scan in RomM. */
   async scanAll(): Promise<void> {
     try {
-      await this.fetch(`/platforms/scan`, { method: "PUT" });
-      console.log(`[RomM] Full library scan triggered`);
+      await this.triggerScan([], "quick");
     } catch (e) {
-      console.error(`[RomM] Scan failed:`, e instanceof Error ? e.message : e);
+      console.error(`[RomM] Full scan failed:`, e instanceof Error ? e.message : e);
     }
   }
 }

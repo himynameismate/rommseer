@@ -7,6 +7,7 @@ import { getProwlarrClient } from "@/lib/prowlarr";
 import { getSABnzbdClient } from "@/lib/sabnzbd";
 import { autoGrabForRequest } from "@/lib/autograb";
 import { getRomMClient } from "@/lib/romm";
+import { copyToRomMLibrary } from "@/lib/postcopy";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -46,7 +47,7 @@ export async function GET() {
           await prisma.download.update({ where: { id: dl.id }, data: { progress, status } });
           if (status === "COMPLETED" && dl.status !== "COMPLETED") {
             await prisma.request.update({ where: { id: dl.requestId }, data: { status: "AVAILABLE" } });
-            triggerRomMScan(dl.requestId);
+            copyAndScan(dl.requestId, dl.id);
           }
           dl.progress = progress;
           dl.status = status;
@@ -85,7 +86,7 @@ export async function GET() {
           await prisma.download.update({ where: { id: dl.id }, data: { progress, status } });
           if (status === "COMPLETED" && dl.status !== "COMPLETED") {
             await prisma.request.update({ where: { id: dl.requestId }, data: { status: "AVAILABLE" } });
-            triggerRomMScan(dl.requestId);
+            copyAndScan(dl.requestId, dl.id);
           }
           dl.progress = progress;
           dl.status = status;
@@ -105,7 +106,7 @@ export async function GET() {
       }
     }
 
-    for (const rid of retryIds) {
+    for (const rid of Array.from(retryIds)) {
       const count = await prisma.download.count({ where: { requestId: rid } });
       if (count >= 3) {
         console.log(`[AutoRetry] #${rid}: max retries (${count}), resetting to APPROVED`);
@@ -185,31 +186,41 @@ export async function POST(req: NextRequest) {
   }
 }
 
-/** Trigger a RomM library scan after a download completes (non-blocking). */
-function triggerRomMScan(requestId: number) {
-  prisma.request.findUnique({
-    where: { id: requestId },
-    include: { game: { include: { platform: true } } },
-  }).then(async (req) => {
-    if (!req) return;
-    const romm = await getRomMClient();
-    if (!romm) return;
-
-    try {
-      const platforms = await romm.getPlatforms();
-      const match = platforms.find((p) =>
-        p.name.toLowerCase() === req.game.platform.name.toLowerCase() ||
-        p.slug.toLowerCase() === req.game.platform.name.toLowerCase().replace(/\s+/g, "-")
-      );
-      if (match) {
-        console.log(`[RomM] Scanning platform "${match.name}" for request #${requestId}`);
-        await romm.scanPlatform(match.id);
+/** Copy ROM files to RomM library and trigger a scan (non-blocking). */
+function copyAndScan(requestId: number, downloadId: number) {
+  copyToRomMLibrary(requestId, downloadId)
+    .then(async (copied) => {
+      if (copied) {
+        console.log(`[PostCopy] Files copied for request #${requestId}, triggering RomM scan`);
       } else {
-        console.log(`[RomM] No matching platform for "${req.game.platform.name}", full scan`);
-        await romm.scanAll();
+        console.log(`[PostCopy] No files copied for request #${requestId}, triggering RomM scan anyway`);
       }
-    } catch (e) {
-      console.error(`[RomM] Scan failed for request #${requestId}:`, e);
-    }
-  }).catch(() => {});
+
+      const req = await prisma.request.findUnique({
+        where: { id: requestId },
+        include: { game: { include: { platform: true } } },
+      });
+      if (!req) return;
+
+      const romm = await getRomMClient();
+      if (!romm) return;
+
+      try {
+        const platforms = await romm.getPlatforms();
+        const match = platforms.find((p) =>
+          p.name.toLowerCase() === req.game.platform.name.toLowerCase() ||
+          p.slug.toLowerCase() === req.game.platform.name.toLowerCase().replace(/\s+/g, "-")
+        );
+        if (match) {
+          console.log(`[RomM] Scanning platform "${match.name}" for request #${requestId}`);
+          await romm.scanPlatform(match.id);
+        } else {
+          console.log(`[RomM] No matching platform for "${req.game.platform.name}", full scan`);
+          await romm.scanAll();
+        }
+      } catch (e) {
+        console.error(`[RomM] Scan failed for request #${requestId}:`, e);
+      }
+    })
+    .catch((e) => console.error(`[PostCopy] Error for request #${requestId}:`, e));
 }

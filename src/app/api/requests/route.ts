@@ -6,6 +6,7 @@ import { autoGrabForRequest } from "@/lib/autograb";
 import { getSABnzbdClient } from "@/lib/sabnzbd";
 import { getQBittorrentClient } from "@/lib/qbittorrent";
 import { getRomMClient } from "@/lib/romm";
+import { copyToRomMLibrary } from "@/lib/postcopy";
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -74,10 +75,10 @@ async function syncAndRetryFailedDownloads() {
         } else if (hs?.status === "Completed") {
           await prisma.download.update({ where: { id: dl.id }, data: { status: "COMPLETED", progress: 100 } });
           dl.status = "COMPLETED";
-          // Update request to AVAILABLE and trigger RomM scan
+          // Update request to AVAILABLE, copy ROM to library, then trigger scan
           await prisma.request.update({ where: { id: dl.requestId }, data: { status: "AVAILABLE" } });
           console.log(`[Sync] Request #${dl.requestId}: download completed, marked AVAILABLE`);
-          triggerRomMScan(dl.requestId);
+          copyAndScan(dl.requestId, dl.id);
         } else if (qs) {
           await prisma.download.update({ where: { id: dl.id }, data: { progress: Math.round(parseFloat(qs.percentage)) } });
         }
@@ -100,9 +101,10 @@ async function syncAndRetryFailedDownloads() {
         } else if (t && t.progress >= 1) {
           await prisma.download.update({ where: { id: dl.id }, data: { status: "COMPLETED", progress: 100 } });
           dl.status = "COMPLETED";
-          // Update request to AVAILABLE when download completes
+          // Update request to AVAILABLE, copy ROM to library, then trigger scan
           await prisma.request.update({ where: { id: dl.requestId }, data: { status: "AVAILABLE" } });
           console.log(`[Sync] Request #${dl.requestId}: torrent completed, marked AVAILABLE`);
+          copyAndScan(dl.requestId, dl.id);
         }
       }
     } catch (e) { console.error("qBit sync:", e); }
@@ -117,7 +119,7 @@ async function syncAndRetryFailedDownloads() {
     if (dl.status === "FAILED") failedIds.add(dl.requestId);
   }
 
-  for (const rid of failedIds) {
+  for (const rid of Array.from(failedIds)) {
     const count = await prisma.download.count({ where: { requestId: rid } });
     if (count >= 3) {
       console.log(`[AutoRetry] #${rid}: max retries (${count})`);
@@ -194,33 +196,42 @@ export async function POST(req: NextRequest) {
   return NextResponse.json(request, { status: 201 });
 }
 
-/** Trigger a RomM library scan after a download completes (non-blocking). */
-function triggerRomMScan(requestId: number) {
-  prisma.request.findUnique({
-    where: { id: requestId },
-    include: { game: { include: { platform: true } } },
-  }).then(async (req) => {
-    if (!req) return;
-    const romm = await getRomMClient();
-    if (!romm) return;
-
-    try {
-      // Try to find the matching RomM platform and scan it
-      const platforms = await romm.getPlatforms();
-      const match = platforms.find((p) =>
-        p.name.toLowerCase() === req.game.platform.name.toLowerCase() ||
-        p.slug.toLowerCase() === req.game.platform.name.toLowerCase().replace(/\s+/g, "-")
-      );
-
-      if (match) {
-        console.log(`[RomM] Scanning platform "${match.name}" (id=${match.id}) for request #${requestId}`);
-        await romm.scanPlatform(match.id);
+/** Copy ROM files to RomM library and trigger a scan (non-blocking). */
+function copyAndScan(requestId: number, downloadId: number) {
+  copyToRomMLibrary(requestId, downloadId)
+    .then(async (copied) => {
+      if (copied) {
+        console.log(`[PostCopy] Files copied for request #${requestId}, triggering RomM scan`);
       } else {
-        console.log(`[RomM] No matching platform for "${req.game.platform.name}", triggering full scan`);
-        await romm.scanAll();
+        console.log(`[PostCopy] No files copied for request #${requestId}, triggering RomM scan anyway`);
       }
-    } catch (e) {
-      console.error(`[RomM] Scan trigger failed for request #${requestId}:`, e);
-    }
-  }).catch((e) => console.error(`[RomM] Scan lookup failed:`, e));
+
+      const req = await prisma.request.findUnique({
+        where: { id: requestId },
+        include: { game: { include: { platform: true } } },
+      });
+      if (!req) return;
+
+      const romm = await getRomMClient();
+      if (!romm) return;
+
+      try {
+        const platforms = await romm.getPlatforms();
+        const match = platforms.find((p) =>
+          p.name.toLowerCase() === req.game.platform.name.toLowerCase() ||
+          p.slug.toLowerCase() === req.game.platform.name.toLowerCase().replace(/\s+/g, "-")
+        );
+
+        if (match) {
+          console.log(`[RomM] Scanning platform "${match.name}" (id=${match.id}) for request #${requestId}`);
+          await romm.scanPlatform(match.id);
+        } else {
+          console.log(`[RomM] No matching platform for "${req.game.platform.name}", triggering full scan`);
+          await romm.scanAll();
+        }
+      } catch (e) {
+        console.error(`[RomM] Scan trigger failed for request #${requestId}:`, e);
+      }
+    })
+    .catch((e) => console.error(`[PostCopy] Error for request #${requestId}:`, e));
 }

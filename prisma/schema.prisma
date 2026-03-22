@@ -89,6 +89,7 @@ model Settings {
   sabnzbdApiKey         String  @default("")
   sabnzbdCategory       String  @default("rommseer")
   autoApprove           Boolean @default(false)
+  rommLibraryPath       String  @default("") // Path to RomM library root accessible by Rommseer (e.g. /romm/library)
   initialized           Boolean @default(false)
 }
 

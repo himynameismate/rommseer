@@ -45,6 +45,7 @@ interface SettingsData {
   sabnzbdApiKey: string;
   sabnzbdCategory: string;
   autoApprove: boolean;
+  rommLibraryPath: string;
 }
 
 type TabKey = "general" | "romm" | "igdb" | "prowlarr" | "qbit" | "sabnzbd";
@@ -83,6 +84,7 @@ export default function SettingsPage() {
     sabnzbdApiKey: "",
     sabnzbdCategory: "rommseer",
     autoApprove: false,
+    rommLibraryPath: "",
   });
   const [saving, setSaving] = useState(false);
   const [testingRomm, setTestingRomm] = useState(false);
@@ -126,6 +128,7 @@ export default function SettingsPage() {
           sabnzbdApiKey: data.sabnzbdApiKey ?? "",
           sabnzbdCategory: data.sabnzbdCategory ?? "rommseer",
           autoApprove: data.autoApprove ?? false,
+          rommLibraryPath: data.rommLibraryPath ?? "",
         });
       })
       .catch(console.error);
@@ -166,6 +169,7 @@ export default function SettingsPage() {
           sabnzbdApiKey: data.sabnzbdApiKey,
           sabnzbdCategory: data.sabnzbdCategory,
           autoApprove: data.autoApprove,
+          rommLibraryPath: data.rommLibraryPath ?? "",
         });
         setSaved(true);
         setTimeout(() => setSaved(false), 3000);
@@ -365,6 +369,21 @@ export default function SettingsPage() {
                         }
                       />
                     </div>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Library Path</label>
+                    <Input
+                      placeholder="/romm/library"
+                      value={settings.rommLibraryPath}
+                      onChange={(e) =>
+                        setSettings((s) => ({ ...s, rommLibraryPath: e.target.value }))
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Path to RomM&apos;s library directory accessible by Rommseer.
+                      Downloaded ROMs will be copied here before triggering a scan.
+                      Leave empty to skip copying (files stay in download client&apos;s folder).
+                    </p>
                   </div>
                   <div className="flex items-center gap-3">
                     <Button

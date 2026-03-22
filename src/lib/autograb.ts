@@ -41,7 +41,7 @@ export async function autoGrabForRequest(requestId: number): Promise<AutoGrabRes
     // Exclude previously failed titles
     const failed = await prisma.download.findMany({ where: { requestId, status: "FAILED" }, select: { torrentName: true } });
     const failedTitles = new Set(failed.map((d) => d.torrentName).filter(Boolean));
-    if (failedTitles.size) console.log(`[AutoGrab] Excluding ${failedTitles.size} failed:`, [...failedTitles]);
+    if (failedTitles.size) console.log(`[AutoGrab] Excluding ${failedTitles.size} failed:`, Array.from(failedTitles));
 
     const allResults = await prowlarr.searchForRom(
       request.game.name, request.game.platform.name,
