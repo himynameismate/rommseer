@@ -120,7 +120,18 @@ const ALL_ROM_EXTENSIONS = Array.from(new Set(Object.values(PLATFORM_EXTENSIONS)
 /** Check if a result title is compatible with the target platform's ROM extensions */
 function matchesPlatformExtensions(title: string, platformName?: string): boolean {
   if (!platformName) return true;
-  const exts = PLATFORM_EXTENSIONS[platformName.toLowerCase()];
+  const pLower = platformName.toLowerCase();
+  // Try direct match first, then reverse-lookup via PLATFORM_KEYWORDS
+  let exts = PLATFORM_EXTENSIONS[pLower];
+  if (!exts) {
+    // Reverse lookup: "gba" → find "game boy advance" in PLATFORM_KEYWORDS → use its extensions
+    for (const [platform, keywords] of Object.entries(PLATFORM_KEYWORDS)) {
+      if (keywords.some((kw) => kw.toLowerCase() === pLower) && PLATFORM_EXTENSIONS[platform]) {
+        exts = PLATFORM_EXTENSIONS[platform];
+        break;
+      }
+    }
+  }
   if (!exts) return true; // Unknown platform, no filtering
 
   const lower = title.toLowerCase();
@@ -174,23 +185,54 @@ const PLATFORM_KEYWORDS: Record<string, string[]> = {
   "xbox 360": ["xbox 360", "x360"],
 };
 
+/**
+ * Resolve a platform name (which may be a slug/abbreviation like "gba") to its
+ * canonical key in PLATFORM_KEYWORDS, plus all keywords that belong to it.
+ * Returns { canonicalKeys: Set of platform keys that match, allKeywords: all keywords for this platform }
+ */
+function resolveTargetPlatform(platformName: string): { canonicalKeys: Set<string>; allKeywords: string[] } {
+  const pLower = platformName.toLowerCase();
+  const canonicalKeys = new Set<string>();
+  const allKeywords: string[] = [];
+
+  // Direct match (e.g., "game boy advance")
+  if (PLATFORM_KEYWORDS[pLower]) {
+    canonicalKeys.add(pLower);
+    allKeywords.push(...PLATFORM_KEYWORDS[pLower]);
+  }
+
+  // Reverse lookup: if platformName is itself a keyword value (e.g., "gba" → "game boy advance")
+  for (const [platform, keywords] of Object.entries(PLATFORM_KEYWORDS)) {
+    if (keywords.some((kw) => kw.toLowerCase() === pLower)) {
+      canonicalKeys.add(platform);
+      allKeywords.push(...keywords);
+    }
+  }
+
+  // Also add the platform name itself as a keyword (so "gba" matches "gba" in title)
+  if (!allKeywords.includes(pLower)) allKeywords.push(pLower);
+
+  return { canonicalKeys, allKeywords: Array.from(new Set(allKeywords)) };
+}
+
 /** Check if a result title mentions a DIFFERENT platform than the one requested */
 function hasPlatformMismatch(title: string, platformName?: string): boolean {
   if (!platformName) return false;
-  const pLower = platformName.toLowerCase();
   const tLower = title.toLowerCase();
+
+  const target = resolveTargetPlatform(platformName);
 
   // Find keywords for OTHER platforms that appear in the title
   for (const [platform, keywords] of Object.entries(PLATFORM_KEYWORDS)) {
-    if (platform === pLower) continue; // Skip the target platform
+    // Skip platforms that belong to the target
+    if (target.canonicalKeys.has(platform)) continue;
 
     for (const kw of keywords) {
       // Check if keyword appears as a distinct word/token in the title (not as part of another word)
       const regex = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
       if (regex.test(tLower)) {
         // Make sure the target platform's keywords don't also match (e.g. "Wii" is in "Wii U")
-        const targetKeywords = PLATFORM_KEYWORDS[pLower] || [];
-        const targetMatches = targetKeywords.some((tk) => {
+        const targetMatches = target.allKeywords.some((tk) => {
           const tkRegex = new RegExp(`\\b${tk.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
           return tkRegex.test(tLower);
         });
