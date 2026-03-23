@@ -55,6 +55,8 @@ interface ProwlarrResult {
   leechers: number | null;
   downloadUrl: string | null;
   magnetUrl: string | null;
+  infoHash: string | null;
+  indexerId: number;
   indexer: string;
   publishDate: string;
   protocol: string;
@@ -131,7 +133,8 @@ export default function RequestsPage() {
   const sendToDownloadClient = async (
     requestId: number,
     url?: string,
-    protocol?: string
+    protocol?: string,
+    extra?: { indexerId?: number; infoHash?: string | null; title?: string }
   ) => {
     const link = url || magnetUrl.trim();
     if (!link) return;
@@ -141,7 +144,7 @@ export default function RequestsPage() {
       const res = await fetch("/api/downloads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ requestId, magnetUrl: link, protocol }),
+        body: JSON.stringify({ requestId, magnetUrl: link, protocol, ...extra }),
       });
 
       if (res.ok) {
@@ -185,12 +188,16 @@ export default function RequestsPage() {
 
   const grabResult = async (requestId: number, result: ProwlarrResult) => {
     const link = result.magnetUrl || result.downloadUrl;
-    if (!link) {
+    if (!link && !result.infoHash) {
       alert("No download URL available for this result");
       return;
     }
     setGrabbingGuid(result.guid);
-    await sendToDownloadClient(requestId, link, result.protocol);
+    await sendToDownloadClient(requestId, link || "", result.protocol, {
+      indexerId: result.indexerId,
+      infoHash: result.infoHash,
+      title: result.title,
+    });
     setGrabbingGuid(null);
   };
 

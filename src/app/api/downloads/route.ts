@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { requestId, magnetUrl, protocol } = await req.json();
+  const { requestId, magnetUrl, protocol, indexerId, infoHash, title } = await req.json();
   if (!requestId || !magnetUrl) {
     return NextResponse.json({ error: "requestId and magnetUrl required" }, { status: 400 });
   }
@@ -75,7 +75,7 @@ export async function POST(req: NextRequest) {
       const opts = { category: settings?.sabnzbdCategory || "rommseer", name: request.game.name };
 
       if (prowlarr) {
-        const file = await prowlarr.downloadFile(magnetUrl);
+        const file = await prowlarr.downloadFile(magnetUrl, indexerId);
         const ids = file ? await sabnzbd.addNzbByFile(file, "download.nzb", opts) : await sabnzbd.addNzbByUrl(magnetUrl, opts);
         nzbId = ids?.[0] || null;
       } else {
@@ -89,9 +89,13 @@ export async function POST(req: NextRequest) {
 
       if (magnetUrl.startsWith("magnet:")) {
         await qbit.addTorrentByUrl(magnetUrl, opts);
+      } else if (infoHash) {
+        // Construct magnet from infoHash — more reliable than downloading .torrent
+        const magnet = `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(title || "download")}`;
+        await qbit.addTorrentByUrl(magnet, opts);
       } else {
         const prowlarr = await getCachedProwlarrClient();
-        const file = prowlarr ? await prowlarr.downloadFile(magnetUrl) : null;
+        const file = prowlarr ? await prowlarr.downloadFile(magnetUrl, indexerId) : null;
         if (file) await qbit.addTorrentByFile(file, "download.torrent", opts);
         else await qbit.addTorrentByUrl(magnetUrl, opts);
       }

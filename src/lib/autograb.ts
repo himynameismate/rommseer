@@ -89,14 +89,30 @@ async function grabTorrent(
 ): Promise<AutoGrabResult> {
   const opts = { category: settings.qbitCategory || "rommseer", savepath: settings.qbitSavePath || undefined, tags: `rommseer,${gameName},auto-grab` };
 
+  // Strategy 1: Use magnet URL directly
   if (r.magnetUrl) {
+    console.log(`[AutoGrab] Using magnet URL`);
     await qbit.addTorrentByUrl(r.magnetUrl, opts);
-  } else if (r.downloadUrl) {
-    const file = await prowlarr.downloadFile(r.downloadUrl);
-    if (!file) throw new Error("Failed to download .torrent file");
-    await qbit.addTorrentByFile(file, `${r.title}.torrent`, opts);
+  }
+  // Strategy 2: Construct magnet from infoHash (most torrent results include this)
+  else if (r.infoHash) {
+    const magnet = `magnet:?xt=urn:btih:${r.infoHash}&dn=${encodeURIComponent(r.title)}`;
+    console.log(`[AutoGrab] Constructed magnet from infoHash: ${r.infoHash}`);
+    await qbit.addTorrentByUrl(magnet, opts);
+  }
+  // Strategy 3: Download .torrent file through Prowlarr proxy, then send to qBit
+  else if (r.downloadUrl) {
+    console.log(`[AutoGrab] Downloading .torrent file: ${r.downloadUrl.substring(0, 80)}...`);
+    const file = await prowlarr.downloadFile(r.downloadUrl, r.indexerId);
+    if (file) {
+      await qbit.addTorrentByFile(file, `${r.title}.torrent`, opts);
+    } else {
+      // Strategy 4: Send download URL directly to qBittorrent (it may handle the download)
+      console.log(`[AutoGrab] .torrent download failed, sending URL directly to qBittorrent`);
+      await qbit.addTorrentByUrl(r.downloadUrl, opts);
+    }
   } else {
-    throw new Error("No download URL");
+    throw new Error("No download URL, magnet, or infoHash available");
   }
 
   await prisma.download.create({ data: { requestId, downloadType: "torrent", magnetUrl: r.magnetUrl || r.downloadUrl, torrentName: r.title, torrentHash: r.infoHash, status: "DOWNLOADING" } });
@@ -111,7 +127,7 @@ async function grabUsenet(
 ): Promise<AutoGrabResult> {
   if (!r.downloadUrl) throw new Error("No download URL for NZB");
 
-  const nzbFile = await prowlarr.downloadFile(r.downloadUrl);
+  const nzbFile = await prowlarr.downloadFile(r.downloadUrl, r.indexerId);
   const opts = { category: category || "rommseer", name: gameName };
   const nzoIds = nzbFile
     ? await sabnzbd.addNzbByFile(nzbFile, `${r.title}.nzb`, opts)

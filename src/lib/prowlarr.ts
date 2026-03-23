@@ -326,15 +326,62 @@ export class ProwlarrClient {
     return Array.from(new Set(q));
   }
 
-  /** Download a .torrent/.nzb file through Prowlarr (handles indexer auth). */
-  async downloadFile(downloadUrl: string): Promise<Buffer | null> {
+  /** Download a .torrent/.nzb file, proxying through Prowlarr if direct fetch fails. */
+  async downloadFile(downloadUrl: string, indexerId?: number): Promise<Buffer | null> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+
     try {
-      const res = await fetch(downloadUrl, { headers: { "X-Api-Key": this.apiKey }, redirect: "follow" });
-      if (!res.ok) return null;
+      // If the URL already points at our Prowlarr instance, fetch directly
+      const isProwlarrUrl = downloadUrl.startsWith(this.baseUrl);
+
+      if (isProwlarrUrl) {
+        const res = await fetch(downloadUrl, {
+          headers: { "X-Api-Key": this.apiKey },
+          redirect: "follow",
+          signal: controller.signal,
+        });
+        if (res.ok) return Buffer.from(await res.arrayBuffer());
+        console.error(`[Prowlarr] Proxied download returned ${res.status}`);
+        return null;
+      }
+
+      // Try proxying through Prowlarr's indexer download endpoint first
+      if (indexerId) {
+        try {
+          const proxyUrl = `${this.baseUrl}/api/v1/indexer/${indexerId}/download?link=${encodeURIComponent(downloadUrl)}`;
+          console.log(`[Prowlarr] Proxying download through Prowlarr for indexer ${indexerId}`);
+          const res = await fetch(proxyUrl, {
+            headers: { "X-Api-Key": this.apiKey },
+            redirect: "follow",
+            signal: controller.signal,
+          });
+          if (res.ok) {
+            const buf = Buffer.from(await res.arrayBuffer());
+            if (buf.length > 0) return buf;
+          }
+          console.log(`[Prowlarr] Proxy download returned ${res.status}, trying direct`);
+        } catch (proxyErr) {
+          console.log(`[Prowlarr] Proxy download failed: ${proxyErr instanceof Error ? proxyErr.message : proxyErr}`);
+        }
+      }
+
+      // Fallback: try direct fetch
+      const res = await fetch(downloadUrl, {
+        headers: { "X-Api-Key": this.apiKey },
+        redirect: "follow",
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        console.error(`[Prowlarr] Direct download returned ${res.status}`);
+        return null;
+      }
       return Buffer.from(await res.arrayBuffer());
     } catch (e) {
       console.error("[Prowlarr] Download error:", e instanceof Error ? e.message : e);
       return null;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 }
