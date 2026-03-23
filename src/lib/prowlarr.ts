@@ -135,6 +135,68 @@ function matchesPlatformExtensions(title: string, platformName?: string): boolea
   return true;
 }
 
+// Platform keywords/abbreviations that, if found in a result title, indicate a specific platform.
+// Used to detect when a result is for a DIFFERENT platform than requested.
+const PLATFORM_KEYWORDS: Record<string, string[]> = {
+  "game boy advance": ["gba"],
+  "game boy color": ["gbc"],
+  "game boy": ["gb"],
+  "nintendo ds": ["nds", "nintendo ds"],
+  "nintendo dsi": ["nds", "dsi", "nintendo ds"],
+  "nintendo 3ds": ["3ds", "citra"],
+  "new nintendo 3ds": ["3ds", "citra"],
+  "nintendo entertainment system": ["nes"],
+  "nes": ["nes"],
+  "super nintendo entertainment system": ["snes", "sfc", "super nintendo"],
+  "super nintendo": ["snes", "sfc", "super nintendo"],
+  "snes": ["snes", "sfc"],
+  "nintendo 64": ["n64"],
+  "gamecube": ["gcn", "gamecube", "ngc"],
+  "nintendo gamecube": ["gcn", "gamecube", "ngc"],
+  "wii": ["wii"],
+  "wii u": ["wii u", "wiiu"],
+  "nintendo switch": ["switch", "nsp", "xci"],
+  "playstation": ["psx", "ps1", "playstation"],
+  "playstation 2": ["ps2", "playstation 2"],
+  "playstation 3": ["ps3", "playstation 3"],
+  "playstation portable": ["psp"],
+  "playstation vita": ["vita", "psvita"],
+  "sega mega drive/genesis": ["genesis", "mega drive", "megadrive"],
+  "genesis": ["genesis", "mega drive"],
+  "dreamcast": ["dreamcast", "dc"],
+  "sega saturn": ["saturn"],
+  "game gear": ["game gear", "gg"],
+  "xbox": ["xbox"],
+  "xbox 360": ["xbox 360", "x360"],
+};
+
+/** Check if a result title mentions a DIFFERENT platform than the one requested */
+function hasPlatformMismatch(title: string, platformName?: string): boolean {
+  if (!platformName) return false;
+  const pLower = platformName.toLowerCase();
+  const tLower = title.toLowerCase();
+
+  // Find keywords for OTHER platforms that appear in the title
+  for (const [platform, keywords] of Object.entries(PLATFORM_KEYWORDS)) {
+    if (platform === pLower) continue; // Skip the target platform
+
+    for (const kw of keywords) {
+      // Check if keyword appears as a distinct word/token in the title (not as part of another word)
+      const regex = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+      if (regex.test(tLower)) {
+        // Make sure the target platform's keywords don't also match (e.g. "Wii" is in "Wii U")
+        const targetKeywords = PLATFORM_KEYWORDS[pLower] || [];
+        const targetMatches = targetKeywords.some((tk) => {
+          const tkRegex = new RegExp(`\\b${tk.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+          return tkRegex.test(tLower);
+        });
+        if (!targetMatches) return true;
+      }
+    }
+  }
+  return false;
+}
+
 /** Check if a result title is relevant to the game we're searching for */
 function isTitleRelevant(title: string, gameName: string): boolean {
   const normalize = (s: string) => stripAccents(s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim());
@@ -218,6 +280,11 @@ export class ProwlarrClient {
         console.log(`[Prowlarr] BLOCKED "${r.title}": wrong extension for ${platformName}`);
         return false;
       }
+      // Check if title mentions a different platform
+      if (hasPlatformMismatch(r.title, platformName)) {
+        console.log(`[Prowlarr] BLOCKED "${r.title}": different platform than ${platformName}`);
+        return false;
+      }
       return true;
     });
 
@@ -236,10 +303,14 @@ export class ProwlarrClient {
     const simple = clean.replace(/\s*(Version|Edition|Special)\s*/gi, " ").replace(/\s+/g, " ").trim();
     const ascii = stripAccents(simple || clean);
 
+    // Get short platform abbreviation for better search results
+    const platAbbrev = platform ? (PLATFORM_KEYWORDS[platform.toLowerCase()]?.[0] || platform) : undefined;
+
     if (template) q.push(template.replace("{game_name}", name).replace("{platform}", platform || "").trim());
     if (platform) q.push(`${name} ${platform}`);
+    if (platAbbrev && platAbbrev !== platform) q.push(`${name} ${platAbbrev}`);
     q.push(name);
-    if (clean !== name) { if (platform) q.push(`${clean} ${platform}`); q.push(clean); }
+    if (clean !== name) { if (platform) q.push(`${clean} ${platform}`); if (platAbbrev && platAbbrev !== platform) q.push(`${clean} ${platAbbrev}`); q.push(clean); }
     if (simple !== clean) { if (platform) q.push(`${simple} ${platform}`); q.push(simple); }
     if (ascii !== (simple || clean)) { if (platform) q.push(`${ascii} ${platform}`); q.push(ascii); }
 
