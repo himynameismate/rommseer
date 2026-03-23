@@ -75,6 +75,7 @@ interface DownloadRecord {
   downloadType: string;
   nzbId: string | null;
   torrentHash: string | null;
+  torrentName: string | null;
   status: string;
   progress: number;
   request?: { status: string } | null;
@@ -82,7 +83,7 @@ interface DownloadRecord {
 
 interface StatusUpdate {
   id: number;
-  data: { status?: string; progress?: number; error?: string };
+  data: { status?: string; progress?: number; error?: string; torrentHash?: string };
 }
 
 interface RequestUpdate {
@@ -146,12 +147,32 @@ export async function syncAndRetryDownloads(
   const stalledHashes: string[] = []; // Track stalled torrents for deletion
   if (qbit) {
     try {
-      const torrents = await qbit.getTorrents(undefined, "rommseer");
+      const settings = await prisma.settings.findUnique({ where: { id: 1 } });
+      const category = settings?.qbitCategory || "rommseer";
+      const torrents = await qbit.getTorrents(undefined, category);
       const tMap = new Map(torrents.map((t) => [t.hash, t]));
+      // Also build a name map for downloads without a stored hash
+      const tNameMap = new Map(torrents.map((t) => [t.name.toLowerCase(), t]));
 
       for (const dl of downloads) {
-        if (dl.downloadType === "usenet" || !dl.torrentHash || dl.status !== "DOWNLOADING") continue;
-        const t = tMap.get(dl.torrentHash);
+        if (dl.downloadType === "usenet" || dl.status !== "DOWNLOADING") continue;
+        // Match by hash first, then by torrent name
+        let t = dl.torrentHash ? tMap.get(dl.torrentHash) : undefined;
+        if (!t && dl.torrentName) {
+          t = tNameMap.get(dl.torrentName.toLowerCase());
+          // Also try partial matching
+          if (!t) {
+            const dlName = dl.torrentName.toLowerCase();
+            t = torrents.find((tt) =>
+              tt.name.toLowerCase().includes(dlName) || dlName.includes(tt.name.toLowerCase())
+            );
+          }
+          // Store the hash for future lookups if we found the torrent
+          if (t && !dl.torrentHash) {
+            downloadUpdates.push({ id: dl.id, data: { torrentHash: t.hash } });
+            dl.torrentHash = t.hash;
+          }
+        }
         if (!t) continue;
 
         const progress = Math.round(t.progress * 100);

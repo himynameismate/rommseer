@@ -38,6 +38,7 @@ export async function GET(req: NextRequest) {
       downloadType: dl.downloadType,
       nzbId: dl.nzbId,
       torrentHash: dl.torrentHash,
+      torrentName: dl.torrentName,
       status: dl.status,
       progress: dl.progress,
       request: dl.request,
