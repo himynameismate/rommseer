@@ -226,7 +226,7 @@ const FORMAT_OVERRIDE_KEYWORDS: Record<string, string[]> = {
 };
 
 /** Check if a result title mentions a DIFFERENT platform than the one requested */
-function hasPlatformMismatch(title: string, platformName?: string): boolean {
+export function hasPlatformMismatch(title: string, platformName?: string): boolean {
   if (!platformName) return false;
   // Normalize title so "Virtual.Console" matches "virtual console"
   const tNorm = normalizeForKeywords(title);
@@ -241,6 +241,11 @@ function hasPlatformMismatch(title: string, platformName?: string): boolean {
       const regex = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
       if (regex.test(tNorm)) return true; // Always block — no target keyword exception
     }
+  }
+
+  // Detect Nintendo Switch title IDs (e.g. [0100300012F2A000]) — these are always Switch games
+  if (!target.canonicalKeys.has("nintendo switch")) {
+    if (/\[01[0-9A-Fa-f]{14}\]/.test(title)) return true;
   }
 
   // Find keywords for OTHER platforms that appear in the title

@@ -78,6 +78,7 @@ interface DownloadRecord {
   torrentName: string | null;
   status: string;
   progress: number;
+  createdAt?: Date | string | null;
   request?: { status: string } | null;
 }
 
@@ -156,24 +157,26 @@ export async function syncAndRetryDownloads(
 
       for (const dl of downloads) {
         if (dl.downloadType === "usenet" || dl.status !== "DOWNLOADING") continue;
-        // Match by hash first, then by torrent name
+        // Match by hash first, then by torrent name (strict: exact match only)
         let t = dl.torrentHash ? tMap.get(dl.torrentHash) : undefined;
         if (!t && dl.torrentName) {
           t = tNameMap.get(dl.torrentName.toLowerCase());
-          // Also try partial matching
-          if (!t) {
-            const dlName = dl.torrentName.toLowerCase();
-            t = torrents.find((tt) =>
-              tt.name.toLowerCase().includes(dlName) || dlName.includes(tt.name.toLowerCase())
-            );
-          }
           // Store the hash for future lookups if we found the torrent
           if (t && !dl.torrentHash) {
             downloadUpdates.push({ id: dl.id, data: { torrentHash: t.hash } });
             dl.torrentHash = t.hash;
           }
         }
-        if (!t) continue;
+        if (!t) {
+          // Torrent not found in qBittorrent — check if it's been missing long enough to mark failed
+          const ageMs = Date.now() - new Date(dl.createdAt || 0).getTime();
+          if (ageMs > 5 * 60 * 1000) {
+            console.log(`[Sync] Request #${dl.requestId}: torrent "${dl.torrentName || dl.torrentHash}" not found in qBittorrent after ${Math.round(ageMs / 60000)}min, marking FAILED`);
+            downloadUpdates.push({ id: dl.id, data: { status: "FAILED", error: "Torrent not found in qBittorrent (never added or removed)" } });
+            dl.status = "FAILED";
+          }
+          continue;
+        }
 
         const progress = Math.round(t.progress * 100);
         if (["error", "missingFiles"].includes(t.state)) {

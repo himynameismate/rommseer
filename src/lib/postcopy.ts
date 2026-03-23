@@ -3,7 +3,7 @@ import { getCachedSABnzbdClient, getCachedQBittorrentClient, getCachedRomMClient
 import { autoGrabForRequest } from "@/lib/autograb";
 import { formatBytes } from "@/lib/utils";
 import { ROM_EXTENSIONS } from "@/lib/constants";
-import { getValidExtensionsForPlatform } from "@/lib/prowlarr";
+import { getValidExtensionsForPlatform, hasPlatformMismatch } from "@/lib/prowlarr";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -110,6 +110,23 @@ export async function copyToRomMLibrary(
         console.log(`[PostCopy] Request #${requestId} reset to APPROVED for retry`);
 
         // Delete the wrong files from the download client
+        await cleanupWrongDownload(download);
+        return false;
+      }
+    }
+
+    // For archive-only downloads, validate the source folder/file name against the platform
+    // This catches cases like "Advance Wars 1+2 Re-Boot Camp [Switch]" being downloaded for GBA
+    const allArchives = romFiles.every((f) => [".zip", ".7z", ".rar"].includes(path.extname(f).toLowerCase()));
+    if (allArchives && romFiles.length > 0) {
+      // Check the source folder name for platform mismatch
+      const sourceName = path.basename(sourcePath);
+      if (hasPlatformMismatch(sourceName, platformName)) {
+        const msg = `Wrong platform: archive "${sourceName}" appears to be for a different platform than "${platformName}"`;
+        console.error(`[PostCopy] ${msg}`);
+        await prisma.download.update({ where: { id: downloadId }, data: { status: "FAILED", error: msg } });
+        await prisma.request.update({ where: { id: requestId }, data: { status: "APPROVED" } });
+        console.log(`[PostCopy] Request #${requestId} reset to APPROVED for retry`);
         await cleanupWrongDownload(download);
         return false;
       }
