@@ -144,10 +144,10 @@ services:
     container_name: rommseer
     network_mode: bridge
     ports:
-      - "3001:3000"
+      - "3000:3000"
     environment:
       - DATABASE_URL=file:/app/data/rommseer.db
-      - NEXTAUTH_URL=http://YOUR_UNRAID_IP:3001
+      - NEXTAUTH_URL=http://YOUR_UNRAID_IP:3000
       - NEXTAUTH_SECRET=generate-a-random-secret
     volumes:
       - /mnt/user/appdata/rommseer:/app/data
@@ -161,7 +161,7 @@ services:
    - `/path/to/romm/library` → must be the **same directory** your RomM container uses as its library root
    - `/path/to/downloads` → must be where SABnzbd/qBittorrent saves completed downloads
 3. Start: `docker compose up -d`
-4. Open `http://YOUR_UNRAID_IP:3001` and log in with the admin credentials shown in the container logs on first run
+4. Open `http://YOUR_UNRAID_IP:3000` and log in with the admin credentials shown in the container logs on first run
 5. Go to **Settings → RomM** and set **Library Path** to `/romm/library`
 
 ## Tech Stack
