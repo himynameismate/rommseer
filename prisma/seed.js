@@ -5,13 +5,21 @@ const prisma = new PrismaClient();
 
 async function main() {
   // Ensure rommLibraryPath has a default on existing installs
-  const existingSettings = await prisma.settings.findUnique({ where: { id: 1 } });
-  if (existingSettings && !existingSettings.rommLibraryPath) {
-    await prisma.settings.update({
-      where: { id: 1 },
-      data: { rommLibraryPath: "/romm/library" },
-    });
-    console.log("Set default RomM library path to /romm/library");
+  try {
+    const existingSettings = await prisma.settings.findUnique({ where: { id: 1 } });
+    if (existingSettings) {
+      if (!existingSettings.rommLibraryPath) {
+        await prisma.settings.update({
+          where: { id: 1 },
+          data: { rommLibraryPath: "/romm/library" },
+        });
+        console.log("Set default RomM library path to /romm/library");
+      } else {
+        console.log("RomM library path already set: " + existingSettings.rommLibraryPath);
+      }
+    }
+  } catch (e) {
+    console.log("Could not check/set library path (column may not exist yet):", e.message);
   }
 
   // Only seed if no admin user exists yet
