@@ -218,6 +218,13 @@ function resolveTargetPlatform(platformName: string): { canonicalKeys: Set<strin
 /** Normalize a title for platform keyword matching: replace dots/underscores/hyphens with spaces */
 const normalizeForKeywords = (s: string) => s.toLowerCase().replace(/[._\-]+/g, " ").replace(/\s+/g, " ");
 
+// Keywords that indicate a re-release FORMAT (not native ROM).
+// If these appear in a title and the target platform is NOT the format's platform, block it
+// even if the target platform's keyword also appears (e.g., "N64 Virtual Console" is Wii, not N64).
+const FORMAT_OVERRIDE_KEYWORDS: Record<string, string[]> = {
+  "wii": ["virtual console", "wiiware", "wii virtual console"],
+};
+
 /** Check if a result title mentions a DIFFERENT platform than the one requested */
 function hasPlatformMismatch(title: string, platformName?: string): boolean {
   if (!platformName) return false;
@@ -226,12 +233,25 @@ function hasPlatformMismatch(title: string, platformName?: string): boolean {
 
   const target = resolveTargetPlatform(platformName);
 
+  // Check format override keywords first — these always indicate a specific platform
+  // regardless of what other platform keywords appear in the title
+  for (const [platform, keywords] of Object.entries(FORMAT_OVERRIDE_KEYWORDS)) {
+    if (target.canonicalKeys.has(platform)) continue; // Skip if target IS this platform
+    for (const kw of keywords) {
+      const regex = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+      if (regex.test(tNorm)) return true; // Always block — no target keyword exception
+    }
+  }
+
   // Find keywords for OTHER platforms that appear in the title
   for (const [platform, keywords] of Object.entries(PLATFORM_KEYWORDS)) {
     // Skip platforms that belong to the target
     if (target.canonicalKeys.has(platform)) continue;
 
     for (const kw of keywords) {
+      // Skip format override keywords (already handled above)
+      if (Object.values(FORMAT_OVERRIDE_KEYWORDS).some((fk) => fk.includes(kw))) continue;
+
       // Check if keyword appears as a distinct word/token in the normalized title
       const regex = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
       if (regex.test(tNorm)) {
