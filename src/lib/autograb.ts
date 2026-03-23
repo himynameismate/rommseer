@@ -59,7 +59,7 @@ export async function autoGrabForRequest(requestId: number): Promise<AutoGrabRes
     let lastErr = "";
     for (let i = 0; i < Math.min(results.length, 5); i++) {
       const r = results[i];
-      console.log(`[AutoGrab] Try ${i + 1}: "${r.title}" (${r.protocol}, ${r.indexer})`);
+      console.log(`[AutoGrab] Try ${i + 1}: "${r.title}" (${r.protocol}, ${r.indexer}) [magnet:${!!r.magnetUrl}, hash:${!!r.infoHash}, url:${!!r.downloadUrl}]`);
       try {
         if (r.protocol === "usenet") {
           if (!sabnzbd) { lastErr = "SABnzbd not configured"; continue; }
@@ -81,43 +81,79 @@ export async function autoGrabForRequest(requestId: number): Promise<AutoGrabRes
   }
 }
 
+/** Wait briefly then check if a torrent actually appeared in qBittorrent */
+async function verifyTorrentAdded(
+  qbit: NonNullable<Awaited<ReturnType<typeof getCachedQBittorrentClient>>>,
+  title: string, category: string,
+): Promise<void> {
+  // Give qBit a moment to process the add
+  await new Promise((r) => setTimeout(r, 3000));
+
+  const torrents = await qbit.getTorrents(undefined, category);
+  const normalized = title.toLowerCase();
+  const found = torrents.some((t) =>
+    t.name.toLowerCase().includes(normalized) || normalized.includes(t.name.toLowerCase())
+  );
+
+  if (!found) {
+    // Also check without category filter in case category creation failed
+    const all = await qbit.getTorrents();
+    const foundAny = all.some((t) => {
+      const n = t.name.toLowerCase();
+      return n.includes(normalized) || normalized.includes(n);
+    });
+    if (!foundAny) {
+      throw new Error("Torrent was not actually added to qBittorrent (silent failure)");
+    }
+  }
+  console.log(`[AutoGrab] Verified torrent appeared in qBittorrent`);
+}
+
 async function grabTorrent(
   prowlarr: NonNullable<Awaited<ReturnType<typeof getCachedProwlarrClient>>>,
   qbit: NonNullable<Awaited<ReturnType<typeof getCachedQBittorrentClient>>>,
   r: ProwlarrRelease, requestId: number,
   settings: { qbitCategory: string; qbitSavePath: string }, gameName: string,
 ): Promise<AutoGrabResult> {
-  const opts = { category: settings.qbitCategory || "rommseer", savepath: settings.qbitSavePath || undefined, tags: `rommseer,${gameName},auto-grab` };
+  const category = settings.qbitCategory || "rommseer";
+  const opts = { category, savepath: settings.qbitSavePath || undefined, tags: `rommseer,${gameName},auto-grab` };
+  let usedMethod = "";
 
   // Strategy 1: Use magnet URL directly
   if (r.magnetUrl) {
     console.log(`[AutoGrab] Using magnet URL`);
     await qbit.addTorrentByUrl(r.magnetUrl, opts);
+    usedMethod = "magnet";
   }
   // Strategy 2: Construct magnet from infoHash (most torrent results include this)
   else if (r.infoHash) {
     const magnet = `magnet:?xt=urn:btih:${r.infoHash}&dn=${encodeURIComponent(r.title)}`;
     console.log(`[AutoGrab] Constructed magnet from infoHash: ${r.infoHash}`);
     await qbit.addTorrentByUrl(magnet, opts);
+    usedMethod = "infoHash-magnet";
   }
-  // Strategy 3: Download .torrent file through Prowlarr proxy, then send to qBit
+  // Strategy 3: Download .torrent file through Prowlarr proxy, then send to qBit as file
   else if (r.downloadUrl) {
     console.log(`[AutoGrab] Downloading .torrent file: ${r.downloadUrl.substring(0, 80)}...`);
     const file = await prowlarr.downloadFile(r.downloadUrl, r.indexerId);
-    if (file) {
+    if (file && file.length > 100) {
+      // Sanity check: valid .torrent files are typically >100 bytes
       await qbit.addTorrentByFile(file, `${r.title}.torrent`, opts);
+      usedMethod = "torrent-file";
     } else {
-      // Strategy 4: Send download URL directly to qBittorrent (it may handle the download)
-      console.log(`[AutoGrab] .torrent download failed, sending URL directly to qBittorrent`);
-      await qbit.addTorrentByUrl(r.downloadUrl, opts);
+      if (file) console.log(`[AutoGrab] Downloaded file too small (${file.length} bytes), likely not a valid .torrent`);
+      throw new Error("Failed to download valid .torrent file from indexer");
     }
   } else {
     throw new Error("No download URL, magnet, or infoHash available");
   }
 
+  // Verify the torrent actually appeared in qBittorrent (qBit returns 200 even on silent failure)
+  await verifyTorrentAdded(qbit, r.title, category);
+
   await prisma.download.create({ data: { requestId, downloadType: "torrent", magnetUrl: r.magnetUrl || r.downloadUrl, torrentName: r.title, torrentHash: r.infoHash, status: "DOWNLOADING" } });
   await prisma.request.update({ where: { id: requestId }, data: { status: "DOWNLOADING" } });
-  return { success: true, message: `Grabbed "${r.title}" from ${r.indexer} via qBittorrent`, torrentTitle: r.title, indexer: r.indexer };
+  return { success: true, message: `Grabbed "${r.title}" from ${r.indexer} via qBittorrent (${usedMethod})`, torrentTitle: r.title, indexer: r.indexer };
 }
 
 async function grabUsenet(
