@@ -118,9 +118,16 @@ export async function copyToRomMLibrary(
   }
 }
 
-/** Get the source file/directory path from the download client. */
+/** Default path where completed downloads are mounted inside the Rommseer container. */
+const DOWNLOADS_PATH = "/downloads";
+
+/** Get the source file/directory path from the download client.
+ *  Download clients report paths from THEIR container's perspective,
+ *  but Rommseer has the completed downloads mounted at /downloads.
+ *  So we use the download name to locate the files in /downloads/.
+ */
 async function getSourcePath(
-  download: { downloadType: string; nzbId: string | null; torrentHash: string | null }
+  download: { downloadType: string; nzbId: string | null; torrentHash: string | null; torrentName: string | null }
 ): Promise<string | null> {
   if (download.downloadType === "usenet" && download.nzbId) {
     const sabnzbd = await getSABnzbdClient();
@@ -128,7 +135,32 @@ async function getSourcePath(
     try {
       const history = await sabnzbd.getHistory(100);
       const slot = history.slots.find((s) => s.nzo_id === download.nzbId);
-      return slot?.storage || null;
+      if (!slot) return null;
+
+      // Try to find the download folder in our mounted /downloads path
+      const name = slot.name;
+      const candidates = [
+        path.join(DOWNLOADS_PATH, name),                      // /downloads/<name>
+        path.join(DOWNLOADS_PATH, slot.category, name),       // /downloads/<category>/<name>
+      ];
+
+      // Also try the raw storage path in case volumes align
+      if (slot.storage) candidates.push(slot.storage);
+
+      for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) {
+          console.log(`[PostCopy] Found SABnzbd download at: ${candidate}`);
+          return candidate;
+        }
+      }
+
+      console.log(`[PostCopy] SABnzbd download "${name}" not found. Tried: ${candidates.join(", ")}`);
+      // List /downloads for debugging
+      try {
+        const entries = fs.readdirSync(DOWNLOADS_PATH);
+        console.log(`[PostCopy] Contents of ${DOWNLOADS_PATH}: ${entries.join(", ")}`);
+      } catch { /* ignore */ }
+      return null;
     } catch (e) {
       console.error(`[PostCopy] SABnzbd history lookup failed:`, e);
       return null;
@@ -141,7 +173,32 @@ async function getSourcePath(
     try {
       const torrents = await qbit.getTorrents();
       const torrent = torrents.find((t) => t.hash === download.torrentHash);
-      return torrent?.content_path || null;
+      if (!torrent) return null;
+
+      const name = torrent.name || download.torrentName;
+      if (!name) return torrent.content_path || null;
+
+      const candidates = [
+        path.join(DOWNLOADS_PATH, name),                      // /downloads/<name>
+        path.join(DOWNLOADS_PATH, torrent.category || "", name), // /downloads/<category>/<name>
+      ];
+
+      // Also try the raw content_path in case volumes align
+      if (torrent.content_path) candidates.push(torrent.content_path);
+
+      for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) {
+          console.log(`[PostCopy] Found qBittorrent download at: ${candidate}`);
+          return candidate;
+        }
+      }
+
+      console.log(`[PostCopy] qBittorrent download "${name}" not found. Tried: ${candidates.join(", ")}`);
+      try {
+        const entries = fs.readdirSync(DOWNLOADS_PATH);
+        console.log(`[PostCopy] Contents of ${DOWNLOADS_PATH}: ${entries.join(", ")}`);
+      } catch { /* ignore */ }
+      return null;
     } catch (e) {
       console.error(`[PostCopy] qBittorrent lookup failed:`, e);
       return null;
@@ -165,7 +222,12 @@ async function getPlatformSlug(
           p.slug.toLowerCase() === platform.slug.toLowerCase() ||
           p.slug.toLowerCase() === platform.name.toLowerCase().replace(/\s+/g, "-")
       );
-      if (match) return match.slug;
+      if (match) {
+        // Use fs_slug (actual folder name on disk) if available, otherwise slug
+        const slug = match.fs_slug || match.slug;
+        console.log(`[PostCopy] Matched RomM platform: "${match.name}" → folder "${slug}"`);
+        return slug;
+      }
     }
   } catch (e) {
     console.error(`[PostCopy] RomM platform lookup failed:`, e);

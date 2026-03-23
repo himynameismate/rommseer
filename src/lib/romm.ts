@@ -4,6 +4,7 @@ import { io } from "socket.io-client";
 interface RomMPlatform {
   id: number;
   slug: string;
+  fs_slug?: string;
   name: string;
   rom_count: number;
 }
