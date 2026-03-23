@@ -50,6 +50,7 @@ services:
   rommseer:
     image: ghcr.io/himynameismate/rommseer:latest
     container_name: rommseer
+    network_mode: bridge
     ports:
       - "3000:3000"
     environment:
@@ -141,6 +142,7 @@ services:
   rommseer:
     image: ghcr.io/himynameismate/rommseer:latest
     container_name: rommseer
+    network_mode: bridge
     ports:
       - "3001:3000"
     environment:
