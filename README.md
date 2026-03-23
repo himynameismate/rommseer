@@ -148,7 +148,8 @@ services:
     environment:
       - DATABASE_URL=file:/app/data/rommseer.db
       - NEXTAUTH_URL=http://YOUR_UNRAID_IP:3000
-      - NEXTAUTH_SECRET=generate-a-random-secret
+      # NEXTAUTH_SECRET is auto-generated on first run if not set
+      # - NEXTAUTH_SECRET=your-random-secret-here
     volumes:
       - /mnt/user/appdata/rommseer:/app/data
       - /path/to/romm/library:/romm/library
