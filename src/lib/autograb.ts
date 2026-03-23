@@ -84,29 +84,62 @@ export async function autoGrabForRequest(requestId: number): Promise<AutoGrabRes
 /** Wait briefly then check if a torrent actually appeared in qBittorrent */
 async function verifyTorrentAdded(
   qbit: NonNullable<Awaited<ReturnType<typeof getCachedQBittorrentClient>>>,
-  title: string, category: string,
+  title: string, category: string, infoHash?: string | null,
 ): Promise<void> {
   // Give qBit a moment to process the add
   await new Promise((r) => setTimeout(r, 3000));
 
   const torrents = await qbit.getTorrents(undefined, category);
   const normalized = title.toLowerCase();
+  const hashLower = infoHash?.toLowerCase();
+
+  // Check by hash first (most reliable — works even before metadata resolves)
+  if (hashLower) {
+    const foundByHash = torrents.some((t) => t.hash.toLowerCase() === hashLower);
+    if (foundByHash) {
+      console.log(`[AutoGrab] Verified torrent appeared in qBittorrent (matched by hash)`);
+      return;
+    }
+  }
+
+  // Check by title match
   const found = torrents.some((t) =>
     t.name.toLowerCase().includes(normalized) || normalized.includes(t.name.toLowerCase())
   );
 
-  if (!found) {
-    // Also check without category filter in case category creation failed
-    const all = await qbit.getTorrents();
-    const foundAny = all.some((t) => {
-      const n = t.name.toLowerCase();
-      return n.includes(normalized) || normalized.includes(n);
-    });
-    if (!foundAny) {
-      throw new Error("Torrent was not actually added to qBittorrent (silent failure)");
+  if (found) {
+    console.log(`[AutoGrab] Verified torrent appeared in qBittorrent (matched by title)`);
+    return;
+  }
+
+  // Check without category filter in case category creation failed
+  const all = await qbit.getTorrents();
+  if (hashLower) {
+    const foundByHash = all.some((t) => t.hash.toLowerCase() === hashLower);
+    if (foundByHash) {
+      console.log(`[AutoGrab] Verified torrent appeared in qBittorrent (matched by hash, no category)`);
+      return;
     }
   }
-  console.log(`[AutoGrab] Verified torrent appeared in qBittorrent`);
+
+  const foundAny = all.some((t) => {
+    const n = t.name.toLowerCase();
+    return n.includes(normalized) || normalized.includes(n);
+  });
+  if (foundAny) {
+    console.log(`[AutoGrab] Verified torrent appeared in qBittorrent (matched by title, no category)`);
+    return;
+  }
+
+  // Check if any very recent torrent was added (within last 30 seconds)
+  const now = Math.floor(Date.now() / 1000);
+  const recentTorrent = all.find((t) => now - t.added_on < 30);
+  if (recentTorrent) {
+    console.log(`[AutoGrab] Verified torrent appeared in qBittorrent (recent add: "${recentTorrent.name}")`);
+    return;
+  }
+
+  throw new Error("Torrent was not actually added to qBittorrent (silent failure)");
 }
 
 async function grabTorrent(
@@ -161,7 +194,7 @@ async function grabTorrent(
 
   // Verify the torrent actually appeared in qBittorrent (skip for Prowlarr-native grabs)
   if (usedMethod !== "prowlarr-native-grab") {
-    await verifyTorrentAdded(qbit, r.title, category);
+    await verifyTorrentAdded(qbit, r.title, category, r.infoHash);
   }
 
   await prisma.download.create({ data: { requestId, downloadType: "torrent", magnetUrl: r.magnetUrl || r.downloadUrl, torrentName: r.title, torrentHash: r.infoHash, status: "DOWNLOADING" } });
