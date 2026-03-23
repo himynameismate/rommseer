@@ -150,17 +150,18 @@ services:
       - NEXTAUTH_URL=http://YOUR_UNRAID_IP:3001
       - NEXTAUTH_SECRET=generate-a-random-secret
     volumes:
-      - /mnt/cache/Container/rommseer:/app/data
-      - /mnt/data/romm/library:/romm/library
-      - /mnt/cache/Downloads/Complete:/downloads
+      - /mnt/user/appdata/rommseer:/app/data
+      - /path/to/romm/library:/romm/library
+      - /path/to/downloads:/downloads
     restart: unless-stopped
 ```
 
 2. Adjust the volume paths to match your setup:
-   - `/mnt/data/romm/library` → must be the **same directory** your RomM container uses as its library root
-   - `/mnt/cache/Downloads/Complete` → must be where SABnzbd/qBittorrent saves completed downloads
+   - `/mnt/user/appdata/rommseer` → persistent data directory for Rommseer's database
+   - `/path/to/romm/library` → must be the **same directory** your RomM container uses as its library root
+   - `/path/to/downloads` → must be where SABnzbd/qBittorrent saves completed downloads
 3. Start: `docker compose up -d`
-4. Open `http://YOUR_UNRAID_IP:3001` and log in with `admin@rommseer.local` / `admin`
+4. Open `http://YOUR_UNRAID_IP:3001` and log in with the admin credentials shown in the container logs on first run
 5. Go to **Settings → RomM** and set **Library Path** to `/romm/library`
 
 ## Tech Stack
