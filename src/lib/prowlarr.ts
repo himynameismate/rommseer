@@ -199,7 +199,7 @@ function hasPlatformMismatch(title: string, platformName?: string): boolean {
 
 /** Check if a result title is relevant to the game we're searching for */
 function isTitleRelevant(title: string, gameName: string): boolean {
-  const normalize = (s: string) => stripAccents(s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim());
+  const normalize = (s: string) => stripAccents(s).toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
   const t = normalize(title);
   const clean = gameName.split(":")[0].trim();
   const simple = clean.replace(/\s*(Version|Edition|Special)\s*/gi, " ").replace(/\s+/g, " ").trim();
