@@ -1,7 +1,9 @@
 import { prisma } from "@/lib/db";
 import { getCachedSABnzbdClient, getCachedQBittorrentClient, getCachedRomMClient, debouncedScan } from "@/lib/clients";
+import { autoGrabForRequest } from "@/lib/autograb";
 import { formatBytes } from "@/lib/utils";
 import { ROM_EXTENSIONS } from "@/lib/constants";
+import { getValidExtensionsForPlatform } from "@/lib/prowlarr";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -81,6 +83,38 @@ export async function copyToRomMLibrary(
       return false;
     }
 
+    // Validate downloaded files match the requested platform
+    const platformName = download.request.game.platform.name;
+    const validExts = getValidExtensionsForPlatform(platformName);
+    if (validExts) {
+      const wrongFiles = romFiles.filter((f) => {
+        const ext = path.extname(f).toLowerCase();
+        return !validExts.includes(ext) && ![".zip", ".7z", ".rar"].includes(ext);
+      });
+
+      if (wrongFiles.length > 0 && wrongFiles.length === romFiles.length) {
+        // ALL ROM files have wrong extensions — this is the wrong platform
+        const foundExts = wrongFiles.map((f) => path.extname(f).toLowerCase()).join(", ");
+        const msg = `Wrong platform: downloaded files have extensions [${foundExts}] but expected [${validExts.join(", ")}] for "${platformName}"`;
+        console.error(`[PostCopy] ${msg}`);
+
+        // Mark download as FAILED so auto-retry picks a different result
+        await prisma.download.update({
+          where: { id: downloadId },
+          data: { status: "FAILED", error: msg },
+        });
+        await prisma.request.update({
+          where: { id: requestId },
+          data: { status: "APPROVED" },
+        });
+        console.log(`[PostCopy] Request #${requestId} reset to APPROVED for retry`);
+
+        // Delete the wrong files from the download client
+        await cleanupWrongDownload(download);
+        return false;
+      }
+    }
+
     let copied = 0;
     for (const srcFile of romFiles) {
       const filename = path.basename(srcFile);
@@ -121,6 +155,16 @@ export async function copyToRomMLibrary(
 export function copyAndScan(requestId: number, downloadId: number): void {
   copyToRomMLibrary(requestId, downloadId)
     .then(async (copied) => {
+      // Check if the download was marked FAILED (wrong platform detection)
+      const dl = await prisma.download.findUnique({ where: { id: downloadId }, select: { status: true } });
+      if (dl?.status === "FAILED") {
+        console.log(`[PostCopy] Download #${downloadId} was marked FAILED (wrong platform), triggering auto-retry`);
+        autoGrabForRequest(requestId)
+          .then((r) => console.log(`[AutoRetry] #${requestId} (wrong platform):`, r.message))
+          .catch((e) => console.error(`[AutoRetry] #${requestId}:`, e));
+        return; // Don't trigger scan for failed downloads
+      }
+
       if (copied) {
         console.log(`[PostCopy] Files copied for request #${requestId}, triggering RomM scan`);
       } else {
@@ -155,6 +199,27 @@ export function copyAndScan(requestId: number, downloadId: number): void {
       }
     })
     .catch((e) => console.error(`[PostCopy] Error for request #${requestId}:`, e));
+}
+
+/**
+ * Clean up a download that was for the wrong platform.
+ * Removes the torrent/NZB from the download client.
+ */
+async function cleanupWrongDownload(
+  download: { downloadType: string; torrentHash: string | null; nzbId: string | null; torrentName: string | null }
+): Promise<void> {
+  try {
+    if (download.torrentHash) {
+      const qbit = await getCachedQBittorrentClient();
+      if (qbit) {
+        console.log(`[PostCopy] Removing wrong-platform torrent from qBittorrent: ${download.torrentHash}`);
+        await qbit.deleteTorrents([download.torrentHash], true);
+      }
+    }
+    // For usenet, SABnzbd auto-cleans completed downloads, so no action needed
+  } catch (e) {
+    console.error(`[PostCopy] Failed to clean up wrong download:`, e);
+  }
 }
 
 /** Default path where completed downloads are mounted inside the Rommseer container. */

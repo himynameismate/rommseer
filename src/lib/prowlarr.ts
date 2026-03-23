@@ -512,5 +512,25 @@ export async function getProwlarrClient(): Promise<ProwlarrClient | null> {
   return s?.prowlarrUrl && s?.prowlarrApiKey ? new ProwlarrClient(s.prowlarrUrl, s.prowlarrApiKey) : null;
 }
 
+/**
+ * Get valid ROM extensions for a platform name (supports slugs like "gba").
+ * Returns null if platform is unknown (no extension filtering should be applied).
+ */
+export function getValidExtensionsForPlatform(platformName: string): string[] | null {
+  const pLower = platformName.toLowerCase();
+
+  // Direct match
+  if (PLATFORM_EXTENSIONS[pLower]) return PLATFORM_EXTENSIONS[pLower];
+
+  // Reverse lookup via PLATFORM_KEYWORDS: "gba" → "game boy advance" → extensions
+  for (const [platform, keywords] of Object.entries(PLATFORM_KEYWORDS)) {
+    if (keywords.some((kw) => kw.toLowerCase() === pLower) && PLATFORM_EXTENSIONS[platform]) {
+      return PLATFORM_EXTENSIONS[platform];
+    }
+  }
+
+  return null;
+}
+
 // Re-export formatBytes from utils for backward compatibility
 export { formatBytes } from "@/lib/utils";
