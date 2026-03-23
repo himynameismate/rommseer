@@ -168,7 +168,7 @@ const PLATFORM_KEYWORDS: Record<string, string[]> = {
   "nintendo 64": ["n64"],
   "gamecube": ["gcn", "gamecube", "ngc"],
   "nintendo gamecube": ["gcn", "gamecube", "ngc"],
-  "wii": ["wii"],
+  "wii": ["wii", "virtual console", "wiiware"],
   "wii u": ["wii u", "wiiu"],
   "nintendo switch": ["switch", "nsp", "xci"],
   "playstation": ["psx", "ps1", "playstation"],
