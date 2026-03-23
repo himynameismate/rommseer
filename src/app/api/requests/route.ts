@@ -3,7 +3,10 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { autoGrabForRequest } from "@/lib/autograb";
-import { syncAndRetryDownloads } from "@/lib/sync";
+import { syncAndRetryDownloads, startBackgroundSync } from "@/lib/sync";
+
+// Start background sync on first import (server startup)
+startBackgroundSync();
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);

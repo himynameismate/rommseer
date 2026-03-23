@@ -1,11 +1,46 @@
 /**
  * Shared sync + auto-retry logic for SABnzbd/qBittorrent downloads.
- * Used by both requests/route.ts and downloads/route.ts.
+ * Includes a background sync interval that automatically detects completed,
+ * failed, and stalled downloads without requiring the admin to visit the page.
  */
 import { prisma } from "@/lib/db";
 import { getCachedSABnzbdClient, getCachedQBittorrentClient } from "@/lib/clients";
 import { autoGrabForRequest } from "@/lib/autograb";
 import { copyAndScan } from "@/lib/postcopy";
+
+// ─── Background sync interval ─────────────────────────────────────────
+const SYNC_INTERVAL_MS = 30_000; // 30 seconds
+let bgSyncStarted = false;
+let bgSyncRunning = false;
+
+/**
+ * Start the background sync loop. Called lazily on first API request.
+ * Runs every 30 seconds to detect completed/failed/stalled downloads
+ * without requiring the admin to manually open the page.
+ */
+export function startBackgroundSync(): void {
+  if (bgSyncStarted) return;
+  bgSyncStarted = true;
+  console.log(`[Sync] Background sync started (every ${SYNC_INTERVAL_MS / 1000}s)`);
+
+  setInterval(async () => {
+    if (bgSyncRunning) return; // Skip if previous sync is still running
+    bgSyncRunning = true;
+    try {
+      const downloads = await prisma.download.findMany({
+        where: { status: "DOWNLOADING" },
+        include: { request: { select: { status: true } } },
+      });
+      if (downloads.length > 0) {
+        await syncAndRetryDownloads(downloads, { useRequestInclude: true });
+      }
+    } catch (e) {
+      console.error("[Sync] Background sync error:", e);
+    } finally {
+      bgSyncRunning = false;
+    }
+  }, SYNC_INTERVAL_MS);
+}
 
 /** Check if a torrent is stalled (no seeds, no peers, no progress) */
 function isTorrentStalled(t: { state: string; num_seeds: number; num_leechs: number; progress: number; added_on: number; dlspeed: number }): boolean {
