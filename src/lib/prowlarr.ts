@@ -276,7 +276,14 @@ export class ProwlarrClient {
     const maxSize = maxSizeMb > 0 ? maxSizeMb * 1024 * 1024 : Infinity;
     const filtered = all.filter((r) => {
       if (!validUrl(r.downloadUrl, "http://", "https://") && !validUrl(r.magnetUrl, "magnet:", "http")) return false;
-      if (r.protocol !== "usenet" && minSeeders > 0 && (r.seeders ?? 0) < minSeeders) return false;
+      // Always require at least 1 seeder for torrents (0-seeder torrents will never download)
+      if (r.protocol !== "usenet") {
+        const effectiveMin = Math.max(minSeeders, 1);
+        if ((r.seeders ?? 0) < effectiveMin) {
+          console.log(`[Prowlarr] BLOCKED "${r.title}": ${r.seeders ?? 0} seeders (need ≥${effectiveMin})`);
+          return false;
+        }
+      }
       if (r.size > maxSize) return false;
       // Title must actually contain the game name
       if (!isTitleRelevant(r.title, gameName)) {

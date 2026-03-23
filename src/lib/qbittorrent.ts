@@ -7,6 +7,8 @@ export interface QBitTorrent {
   progress: number;
   dlspeed: number;
   upspeed: number;
+  num_seeds: number;
+  num_leechs: number;
   state: string;
   category: string;
   tags: string;

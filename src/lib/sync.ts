@@ -7,6 +7,33 @@ import { getCachedSABnzbdClient, getCachedQBittorrentClient } from "@/lib/client
 import { autoGrabForRequest } from "@/lib/autograb";
 import { copyAndScan } from "@/lib/postcopy";
 
+/** Check if a torrent is stalled (no seeds, no peers, no progress) */
+function isTorrentStalled(t: { state: string; num_seeds: number; num_leechs: number; progress: number; added_on: number; dlspeed: number }): boolean {
+  const seeds = t.num_seeds;
+  const peers = t.num_leechs;
+  const speed = t.dlspeed;
+
+  // Not stalled if it has any seeds, peers, or download speed
+  if (seeds > 0 || peers > 0 || speed > 0) return false;
+
+  // Not stalled if already has significant progress (might just be paused temporarily)
+  if (t.progress > 0.5) return false;
+
+  // Only mark as stalled if the torrent has been around for at least 5 minutes
+  // (give new torrents time to find peers)
+  const ageSeconds = Math.floor(Date.now() / 1000) - t.added_on;
+  if (ageSeconds < 300) return false;
+
+  // States that indicate staleness
+  const stalledStates = ["stalledDL", "metaDL", "forcedMetaDL", "queuedDL"];
+  if (stalledStates.includes(t.state)) return true;
+
+  // Also catch "downloading" with 0 speed and 0 seeds for 5+ minutes
+  if (t.state === "downloading" && speed === 0) return true;
+
+  return false;
+}
+
 interface DownloadRecord {
   id: number;
   requestId: number;
@@ -81,6 +108,7 @@ export async function syncAndRetryDownloads(
 
   // Sync qBittorrent status (filter by rommseer category)
   const qbit = await getCachedQBittorrentClient();
+  const stalledHashes: string[] = []; // Track stalled torrents for deletion
   if (qbit) {
     try {
       const torrents = await qbit.getTorrents(undefined, "rommseer");
@@ -93,14 +121,21 @@ export async function syncAndRetryDownloads(
 
         const progress = Math.round(t.progress * 100);
         if (["error", "missingFiles"].includes(t.state)) {
-          downloadUpdates.push({ id: dl.id, data: { status: "FAILED", progress } });
+          downloadUpdates.push({ id: dl.id, data: { status: "FAILED", progress, error: `Torrent error: ${t.state}` } });
           dl.status = "FAILED";
+          stalledHashes.push(t.hash);
         } else if (t.progress >= 1) {
           downloadUpdates.push({ id: dl.id, data: { status: "COMPLETED", progress: 100 } });
           dl.status = "COMPLETED";
           requestUpdates.push({ id: dl.requestId, data: { status: "AVAILABLE" } });
           completedPairs.push({ requestId: dl.requestId, downloadId: dl.id });
           console.log(`[Sync] Request #${dl.requestId}: torrent completed, marked AVAILABLE`);
+        } else if (isTorrentStalled(t)) {
+          // Torrent has 0 seeds/peers and no progress — it will never complete
+          console.log(`[Sync] Request #${dl.requestId}: torrent "${t.name}" is stalled (seeds: ${t.num_seeds}, peers: ${t.num_leechs}, state: ${t.state}, progress: ${progress}%)`);
+          downloadUpdates.push({ id: dl.id, data: { status: "FAILED", progress, error: "Stalled: no seeds or peers available" } });
+          dl.status = "FAILED";
+          stalledHashes.push(t.hash);
         } else if (progress !== Math.round(dl.progress)) {
           downloadUpdates.push({ id: dl.id, data: { progress } });
         }
@@ -114,6 +149,14 @@ export async function syncAndRetryDownloads(
       ...downloadUpdates.map((u) => prisma.download.update({ where: { id: u.id }, data: u.data })),
       ...requestUpdates.map((u) => prisma.request.update({ where: { id: u.id }, data: u.data })),
     ]);
+  }
+
+  // Remove stalled/failed torrents from qBittorrent (free up space)
+  if (qbit && stalledHashes.length > 0) {
+    try {
+      console.log(`[Sync] Removing ${stalledHashes.length} stalled/failed torrent(s) from qBittorrent`);
+      await qbit.deleteTorrents(stalledHashes, true);
+    } catch (e) { console.error("[Sync] Failed to remove stalled torrents:", e); }
   }
 
   // Trigger copy+scan for completed downloads (non-blocking)
