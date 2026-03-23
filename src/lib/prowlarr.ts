@@ -215,10 +215,14 @@ function resolveTargetPlatform(platformName: string): { canonicalKeys: Set<strin
   return { canonicalKeys, allKeywords: Array.from(new Set(allKeywords)) };
 }
 
+/** Normalize a title for platform keyword matching: replace dots/underscores/hyphens with spaces */
+const normalizeForKeywords = (s: string) => s.toLowerCase().replace(/[._\-]+/g, " ").replace(/\s+/g, " ");
+
 /** Check if a result title mentions a DIFFERENT platform than the one requested */
 function hasPlatformMismatch(title: string, platformName?: string): boolean {
   if (!platformName) return false;
-  const tLower = title.toLowerCase();
+  // Normalize title so "Virtual.Console" matches "virtual console"
+  const tNorm = normalizeForKeywords(title);
 
   const target = resolveTargetPlatform(platformName);
 
@@ -228,13 +232,13 @@ function hasPlatformMismatch(title: string, platformName?: string): boolean {
     if (target.canonicalKeys.has(platform)) continue;
 
     for (const kw of keywords) {
-      // Check if keyword appears as a distinct word/token in the title (not as part of another word)
+      // Check if keyword appears as a distinct word/token in the normalized title
       const regex = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
-      if (regex.test(tLower)) {
+      if (regex.test(tNorm)) {
         // Make sure the target platform's keywords don't also match (e.g. "Wii" is in "Wii U")
         const targetMatches = target.allKeywords.some((tk) => {
           const tkRegex = new RegExp(`\\b${tk.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
-          return tkRegex.test(tLower);
+          return tkRegex.test(tNorm);
         });
         if (!targetMatches) return true;
       }
