@@ -43,8 +43,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json(enrichedResults);
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Search failed";
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error("Game search failed:", error instanceof Error ? error.message : error);
+    return NextResponse.json({ error: "Search failed" }, { status: 500 });
   }
 }

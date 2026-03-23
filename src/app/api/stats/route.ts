@@ -9,20 +9,58 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const isAdmin = session.user.role === "ADMIN";
+
+  if (isAdmin) {
+    // Admin sees full stats
+    const [
+      totalRequests,
+      pendingRequests,
+      approvedRequests,
+      availableGames,
+      totalUsers,
+      recentRequests,
+    ] = await Promise.all([
+      prisma.request.count(),
+      prisma.request.count({ where: { status: "PENDING" } }),
+      prisma.request.count({ where: { status: "APPROVED" } }),
+      prisma.game.count({ where: { isAvailable: true } }),
+      prisma.user.count(),
+      prisma.request.findMany({
+        take: 10,
+        orderBy: { createdAt: "desc" },
+        include: {
+          game: { include: { platform: true } },
+          user: { select: { id: true, name: true } },
+        },
+      }),
+    ]);
+
+    return NextResponse.json({
+      totalRequests,
+      pendingRequests,
+      approvedRequests,
+      availableGames,
+      totalUsers,
+      recentRequests,
+    });
+  }
+
+  // Non-admin users only see their own stats
+  const userId = session.user.id;
   const [
     totalRequests,
     pendingRequests,
     approvedRequests,
     availableGames,
-    totalUsers,
     recentRequests,
   ] = await Promise.all([
-    prisma.request.count(),
-    prisma.request.count({ where: { status: "PENDING" } }),
-    prisma.request.count({ where: { status: "APPROVED" } }),
+    prisma.request.count({ where: { userId } }),
+    prisma.request.count({ where: { userId, status: "PENDING" } }),
+    prisma.request.count({ where: { userId, status: "APPROVED" } }),
     prisma.game.count({ where: { isAvailable: true } }),
-    prisma.user.count(),
     prisma.request.findMany({
+      where: { userId },
       take: 10,
       orderBy: { createdAt: "desc" },
       include: {
@@ -37,7 +75,7 @@ export async function GET() {
     pendingRequests,
     approvedRequests,
     availableGames,
-    totalUsers,
+    totalUsers: 0, // Hidden from non-admin users
     recentRequests,
   });
 }

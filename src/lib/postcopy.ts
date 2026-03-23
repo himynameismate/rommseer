@@ -73,7 +73,20 @@ export async function copyToRomMLibrary(
     return false;
   }
 
-  const destDir = path.join(settings.rommLibraryPath, platformSlug);
+  // Sanitize platformSlug to only allow safe characters
+  if (!/^[a-zA-Z0-9_-]+$/.test(platformSlug)) {
+    console.error(`[PostCopy] Invalid platform slug: "${platformSlug}"`);
+    return false;
+  }
+
+  const destDir = path.resolve(settings.rommLibraryPath, platformSlug);
+
+  // Validate destDir is within the expected library path
+  const resolvedLibraryPath = path.resolve(settings.rommLibraryPath);
+  if (!destDir.startsWith(resolvedLibraryPath + path.sep) && destDir !== resolvedLibraryPath) {
+    console.error(`[PostCopy] Path traversal detected: destDir "${destDir}" is outside library path "${resolvedLibraryPath}"`);
+    return false;
+  }
 
   console.log(`[PostCopy] Copying from "${sourcePath}" to "${destDir}" for request #${requestId}`);
 
@@ -94,7 +107,13 @@ export async function copyToRomMLibrary(
     let copied = 0;
     for (const srcFile of romFiles) {
       const filename = path.basename(srcFile);
-      const destFile = path.join(destDir, filename);
+      const destFile = path.resolve(destDir, filename);
+
+      // Validate destFile is within destDir to prevent path traversal via filename
+      if (!destFile.startsWith(destDir + path.sep) && destFile !== destDir) {
+        console.error(`[PostCopy] Skipping file with suspicious name: "${filename}"`);
+        continue;
+      }
 
       if (fs.existsSync(destFile)) {
         const srcStat = fs.statSync(srcFile);

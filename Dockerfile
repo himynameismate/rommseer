@@ -44,6 +44,10 @@ COPY --from=deps /app/node_modules/bcryptjs ./node_modules/bcryptjs
 # Copy seed script
 COPY prisma/seed.js ./prisma/seed.js
 
+# Copy entrypoint script
+COPY entrypoint.sh ./entrypoint.sh
+RUN chmod +x ./entrypoint.sh
+
 # Create data directory for SQLite
 RUN mkdir -p /app/data
 
@@ -52,4 +56,4 @@ ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 ENV DATABASE_URL="file:/app/data/rommseer.db"
 
-CMD ["sh", "-c", "node node_modules/prisma/build/index.js db push --skip-generate --accept-data-loss && node prisma/seed.js && node server.js"]
+ENTRYPOINT ["./entrypoint.sh"]

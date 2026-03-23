@@ -18,6 +18,12 @@ export async function GET(req: NextRequest) {
   const status = searchParams.get("status");
   const isAdmin = session.user.role === "ADMIN";
 
+  // Validate status parameter against allowed values
+  const ALLOWED_STATUSES = ["PENDING", "APPROVED", "DECLINED", "AVAILABLE", "DOWNLOADING"];
+  if (status && !ALLOWED_STATUSES.includes(status)) {
+    return NextResponse.json({ error: "Invalid status filter" }, { status: 400 });
+  }
+
   const where: Record<string, unknown> = {};
   if (status) where.status = status;
   if (!isAdmin) where.userId = session.user.id;
@@ -144,6 +150,14 @@ export async function POST(req: NextRequest) {
   if (!gameId) {
     return NextResponse.json(
       { error: "gameId is required" },
+      { status: 400 }
+    );
+  }
+
+  // Validate comment length
+  if (comment !== undefined && comment !== null && typeof comment === "string" && comment.length > 1000) {
+    return NextResponse.json(
+      { error: "Comment must be 1000 characters or less" },
       { status: 400 }
     );
   }

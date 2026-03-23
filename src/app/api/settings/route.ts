@@ -6,6 +6,7 @@ import { RomMClient } from "@/lib/romm";
 import { QBittorrentClient } from "@/lib/qbittorrent";
 import { ProwlarrClient } from "@/lib/prowlarr";
 import { SABnzbdClient } from "@/lib/sabnzbd";
+import { applyRateLimit } from "@/lib/rate-limit";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -53,12 +54,22 @@ export async function GET() {
 }
 
 export async function PUT(req: NextRequest) {
+  const rateLimited = applyRateLimit(req, "settings-put", 20, 60_000);
+  if (rateLimited) return rateLimited;
+
   const session = await getServerSession(authOptions);
   if (!session || session.user.role !== "ADMIN") {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const body = await req.json();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let body: any;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
+  }
+
   const {
     rommUrl,
     rommUsername,
@@ -83,6 +94,28 @@ export async function PUT(req: NextRequest) {
     autoApprove,
     rommLibraryPath,
   } = body;
+
+  // Validate URL fields use http:// or https:// schemes only
+  const urlFields: Record<string, unknown> = { rommUrl, prowlarrUrl, qbitUrl, sabnzbdUrl };
+  for (const [fieldName, value] of Object.entries(urlFields)) {
+    if (value !== undefined && value !== null && value !== "") {
+      const urlStr = String(value);
+      try {
+        const parsed = new URL(urlStr);
+        if (!["http:", "https:"].includes(parsed.protocol)) {
+          return NextResponse.json(
+            { error: `${fieldName} must use http:// or https://` },
+            { status: 400 }
+          );
+        }
+      } catch {
+        return NextResponse.json(
+          { error: `${fieldName} is not a valid URL` },
+          { status: 400 }
+        );
+      }
+    }
+  }
 
   const data: Record<string, unknown> = { initialized: true };
 
@@ -168,6 +201,9 @@ export async function PUT(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const rateLimited = applyRateLimit(req, "settings-post", 20, 60_000);
+  if (rateLimited) return rateLimited;
+
   const session = await getServerSession(authOptions);
   if (!session || session.user.role !== "ADMIN") {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -240,9 +276,8 @@ export async function POST(req: NextRequest) {
       }
       return NextResponse.json({ success });
     } catch (error) {
-      const msg = error instanceof Error ? error.message : "Unknown error";
-      console.error("Prowlarr connection test failed:", msg);
-      return NextResponse.json({ success: false, error: msg });
+      console.error("Prowlarr connection test failed:", error instanceof Error ? error.message : error);
+      return NextResponse.json({ success: false, error: "Connection test failed" });
     }
   }
 
@@ -268,9 +303,8 @@ export async function POST(req: NextRequest) {
       const success = await client.testConnection();
       return NextResponse.json({ success });
     } catch (error) {
-      const msg = error instanceof Error ? error.message : "Unknown error";
-      console.error("SABnzbd connection test failed:", msg);
-      return NextResponse.json({ success: false, error: msg });
+      console.error("SABnzbd connection test failed:", error instanceof Error ? error.message : error);
+      return NextResponse.json({ success: false, error: "Connection test failed" });
     }
   }
 

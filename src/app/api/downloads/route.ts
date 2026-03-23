@@ -178,11 +178,11 @@ export async function POST(req: NextRequest) {
     await prisma.request.update({ where: { id: requestId }, data: { status: "DOWNLOADING" } });
     return NextResponse.json(download);
   } catch (error) {
-    console.error("Download failed:", error);
+    console.error("Download failed:", error instanceof Error ? error.message : error);
     const download = await prisma.download.create({
       data: { requestId, downloadType: isUsenet ? "usenet" : "torrent", magnetUrl, status: "FAILED", error: error instanceof Error ? error.message : "Unknown error" },
     });
-    return NextResponse.json({ error: "Failed to add download", download }, { status: 500 });
+    return NextResponse.json({ error: "Failed to add download" }, { status: 500 });
   }
 }
 

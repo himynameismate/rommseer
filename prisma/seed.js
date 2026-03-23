@@ -1,5 +1,6 @@
 const { PrismaClient } = require("@prisma/client");
 const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
 
 const prisma = new PrismaClient();
 
@@ -29,7 +30,9 @@ async function main() {
     return;
   }
 
-  const hashedPassword = await bcrypt.hash("admin", 12);
+  // Generate a random password for the admin user (unique per install)
+  const randomPassword = crypto.randomBytes(16).toString("base64url");
+  const hashedPassword = await bcrypt.hash(randomPassword, 12);
 
   await prisma.user.upsert({
     where: { email: "admin@rommseer.local" },
@@ -56,7 +59,16 @@ async function main() {
     },
   });
 
-  console.log("Database seeded with default admin user (admin@rommseer.local / admin)");
+  console.log("==========================================================");
+  console.log("  ROMMSEER INITIAL SETUP");
+  console.log("==========================================================");
+  console.log("  Admin account created:");
+  console.log("    Email:    admin@rommseer.local");
+  console.log("    Password: " + randomPassword);
+  console.log("");
+  console.log("  IMPORTANT: Save this password now! It will not be shown again.");
+  console.log("  You can change it after logging in via the Settings page.");
+  console.log("==========================================================");
 }
 
 main()

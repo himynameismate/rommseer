@@ -7,7 +7,9 @@ services:
     environment:
       - DATABASE_URL=file:/app/data/rommseer.db
       - NEXTAUTH_URL=http://localhost:3000
-      - NEXTAUTH_SECRET=change-me-to-a-random-secret
+      # NEXTAUTH_SECRET is auto-generated on first run if not set.
+      # Uncomment and set your own for reproducibility across containers:
+      # - NEXTAUTH_SECRET=your-random-secret-here
     volumes:
       - rommseer_data:/app/data
       # Mount the RomM library so Rommseer can copy completed ROMs into it.
