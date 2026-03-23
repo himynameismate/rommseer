@@ -4,6 +4,16 @@ const bcrypt = require("bcryptjs");
 const prisma = new PrismaClient();
 
 async function main() {
+  // Ensure rommLibraryPath has a default on existing installs
+  const existingSettings = await prisma.settings.findUnique({ where: { id: 1 } });
+  if (existingSettings && !existingSettings.rommLibraryPath) {
+    await prisma.settings.update({
+      where: { id: 1 },
+      data: { rommLibraryPath: "/romm/library" },
+    });
+    console.log("Set default RomM library path to /romm/library");
+  }
+
   // Only seed if no admin user exists yet
   const existingAdmin = await prisma.user.findFirst({ where: { role: "ADMIN" } });
   if (existingAdmin) {
@@ -33,6 +43,7 @@ async function main() {
       rommApiKey: "",
       igdbClientId: "",
       igdbClientSecret: "",
+      rommLibraryPath: "/romm/library",
       initialized: false,
     },
   });

@@ -26,6 +26,7 @@ async function main() {
       rommApiKey: "",
       igdbClientId: "",
       igdbClientSecret: "",
+      rommLibraryPath: "/romm/library",
       initialized: false,
     },
   });
