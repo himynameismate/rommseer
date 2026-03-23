@@ -45,11 +45,13 @@ COPY --from=deps --chown=nextjs:nodejs /app/node_modules/.prisma ./node_modules/
 # Create data directory for SQLite
 RUN mkdir -p /app/data && chown nextjs:nodejs /app/data
 
-USER nextjs
+# Entrypoint handles permissions on mounted volumes then starts as nextjs
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
 
 EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 ENV DATABASE_URL="file:/app/data/rommseer.db"
 
-CMD ["sh", "-c", "node node_modules/prisma/build/index.js db push --skip-generate && node server.js"]
+CMD ["/app/docker-entrypoint.sh"]
