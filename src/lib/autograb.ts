@@ -132,28 +132,38 @@ async function grabTorrent(
     await qbit.addTorrentByUrl(magnet, opts);
     usedMethod = "infoHash-magnet";
   }
-  // Strategy 3: Download .torrent file through Prowlarr proxy, then send to qBit as file
+  // Strategy 3: Download .torrent file through Prowlarr, then send to qBit as file
   else if (r.downloadUrl) {
     console.log(`[AutoGrab] Downloading .torrent file: ${r.downloadUrl.substring(0, 80)}...`);
     const file = await prowlarr.downloadFile(r.downloadUrl, r.indexerId);
     if (file && file.length > 100) {
-      // Sanity check: valid .torrent files are typically >100 bytes
       await qbit.addTorrentByFile(file, `${r.title}.torrent`, opts);
       usedMethod = "torrent-file";
     } else {
-      if (file) console.log(`[AutoGrab] Downloaded file too small (${file.length} bytes), likely not a valid .torrent`);
-      throw new Error("Failed to download valid .torrent file from indexer");
+      // Strategy 4: Use Prowlarr's native grab API — tells Prowlarr to send the release
+      // directly to its own configured download client (bypasses Rommseer entirely)
+      if (file) console.log(`[AutoGrab] Downloaded file too small (${file.length} bytes)`);
+      console.log(`[AutoGrab] Trying Prowlarr-native grab (Prowlarr → download client directly)`);
+      const grabbed = await prowlarr.grabRelease(r);
+      if (grabbed) {
+        usedMethod = "prowlarr-native-grab";
+      } else {
+        throw new Error("All download methods failed: no magnet/hash, .torrent download failed, Prowlarr grab failed");
+      }
     }
   } else {
     throw new Error("No download URL, magnet, or infoHash available");
   }
 
-  // Verify the torrent actually appeared in qBittorrent (qBit returns 200 even on silent failure)
-  await verifyTorrentAdded(qbit, r.title, category);
+  // Verify the torrent actually appeared in qBittorrent (skip for Prowlarr-native grabs)
+  if (usedMethod !== "prowlarr-native-grab") {
+    await verifyTorrentAdded(qbit, r.title, category);
+  }
 
   await prisma.download.create({ data: { requestId, downloadType: "torrent", magnetUrl: r.magnetUrl || r.downloadUrl, torrentName: r.title, torrentHash: r.infoHash, status: "DOWNLOADING" } });
   await prisma.request.update({ where: { id: requestId }, data: { status: "DOWNLOADING" } });
-  return { success: true, message: `Grabbed "${r.title}" from ${r.indexer} via qBittorrent (${usedMethod})`, torrentTitle: r.title, indexer: r.indexer };
+  const via = usedMethod === "prowlarr-native-grab" ? "Prowlarr" : "qBittorrent";
+  return { success: true, message: `Grabbed "${r.title}" from ${r.indexer} via ${via} (${usedMethod})`, torrentTitle: r.title, indexer: r.indexer };
 }
 
 async function grabUsenet(

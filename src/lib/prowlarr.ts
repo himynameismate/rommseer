@@ -385,11 +385,42 @@ export class ProwlarrClient {
         return null;
       }
       return Buffer.from(await res.arrayBuffer());
-    } catch (e) {
-      console.error("[Prowlarr] Download error:", e instanceof Error ? e.message : e);
+    } catch (e: unknown) {
+      const err = e instanceof Error ? e : null;
+      const cause = err && "cause" in err ? (err.cause as Error)?.message || String(err.cause) : "unknown";
+      console.error(`[Prowlarr] Download error: ${err?.message || e} (cause: ${cause})`);
       return null;
     } finally {
       clearTimeout(timeout);
+    }
+  }
+
+  /**
+   * Tell Prowlarr to grab a release and send it to Prowlarr's own configured download client.
+   * This bypasses Rommseer having to download files entirely — Prowlarr handles everything.
+   * Requires a download client (qBittorrent/SABnzbd) to be configured in Prowlarr.
+   */
+  async grabRelease(release: ProwlarrRelease): Promise<boolean> {
+    try {
+      console.log(`[Prowlarr] Attempting Prowlarr-native grab for "${release.title}" via indexer ${release.indexer}`);
+      const res = await fetch(`${this.baseUrl}/api/v1/search`, {
+        method: "POST",
+        headers: { "X-Api-Key": this.apiKey, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          guid: release.guid,
+          indexerId: release.indexerId,
+        }),
+      });
+      if (res.ok) {
+        console.log(`[Prowlarr] Prowlarr-native grab succeeded`);
+        return true;
+      }
+      const errText = await res.text().catch(() => "");
+      console.log(`[Prowlarr] Prowlarr-native grab returned ${res.status}: ${errText.substring(0, 200)}`);
+      return false;
+    } catch (e) {
+      console.log(`[Prowlarr] Prowlarr-native grab failed: ${e instanceof Error ? e.message : e}`);
+      return false;
     }
   }
 }
