@@ -42,8 +42,6 @@ COPY --from=deps /app/node_modules/.prisma ./node_modules/.prisma
 # Create data directory for SQLite
 RUN mkdir -p /app/data && chown nextjs:nodejs /app/data
 
-# Seed script
-COPY --from=deps /app/node_modules/.bin/prisma /usr/local/bin/prisma-cli
 COPY prisma/seed.ts ./prisma/seed.ts
 
 USER nextjs
@@ -53,4 +51,4 @@ ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 ENV DATABASE_URL="file:/app/data/rommseer.db"
 
-CMD ["sh", "-c", "npx prisma db push --skip-generate && node server.js"]
+CMD ["sh", "-c", "node node_modules/prisma/build/index.js db push --skip-generate && node server.js"]
