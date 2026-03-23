@@ -1,5 +1,9 @@
 import { prisma } from "@/lib/db";
 
+export type DownloadFileResult =
+  | { type: "file"; data: Buffer }
+  | { type: "magnet"; url: string };
+
 export interface ProwlarrRelease {
   guid: string;
   title: string;
@@ -345,46 +349,75 @@ export class ProwlarrClient {
     return null;
   }
 
-  /** Download a .torrent/.nzb file through Prowlarr. */
-  async downloadFile(downloadUrl: string, indexerId?: number): Promise<Buffer | null> {
+  /**
+   * Download a .torrent/.nzb file through Prowlarr.
+   * Returns { type: "file", data: Buffer } for binary files,
+   * or { type: "magnet", url: string } if the download redirects to a magnet link
+   * (common with public indexers like LimeTorrents).
+   */
+  async downloadFile(downloadUrl: string, indexerId?: number): Promise<DownloadFileResult | null> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
+    const timeout = setTimeout(() => controller.abort(), 30000);
 
     try {
-      // Check if this is a Prowlarr download URL (/{indexerId}/download?...)
-      // and rewrite it to use our configured base URL (handles hostname mismatches)
-      const rewrittenUrl = this.rewriteProwlarrUrl(downloadUrl);
+      // Rewrite Prowlarr download URLs to use our configured base URL
+      const url = this.rewriteProwlarrUrl(downloadUrl) || downloadUrl;
+      console.log(`[Prowlarr] Downloading: ${url.substring(0, 120)}...`);
 
-      if (rewrittenUrl) {
-        console.log(`[Prowlarr] Fetching via Prowlarr: ${rewrittenUrl.substring(0, 100)}...`);
-        const res = await fetch(rewrittenUrl, {
-          headers: { "X-Api-Key": this.apiKey },
-          redirect: "follow",
-          signal: controller.signal,
-        });
-        if (res.ok) {
-          const buf = Buffer.from(await res.arrayBuffer());
-          if (buf.length > 100) return buf; // Valid .torrent files are >100 bytes
-          console.error(`[Prowlarr] Downloaded file too small (${buf.length} bytes)`);
-          return null;
-        }
-        const errText = await res.text().catch(() => "");
-        console.error(`[Prowlarr] Prowlarr download returned ${res.status}: ${errText.substring(0, 200)}`);
-        return null;
-      }
-
-      // Not a Prowlarr URL — try fetching directly (external indexer URL)
-      console.log(`[Prowlarr] Direct download: ${downloadUrl.substring(0, 100)}...`);
-      const res = await fetch(downloadUrl, {
+      // Use redirect: "manual" to catch magnet: redirects
+      // (Node.js fetch crashes on non-HTTP redirect targets)
+      const res = await fetch(url, {
         headers: { "X-Api-Key": this.apiKey },
-        redirect: "follow",
+        redirect: "manual",
         signal: controller.signal,
       });
-      if (!res.ok) {
-        console.error(`[Prowlarr] Direct download returned ${res.status}`);
+
+      // Handle redirects — check if it's a magnet: link
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get("location");
+        if (location?.startsWith("magnet:")) {
+          console.log(`[Prowlarr] Download redirected to magnet link!`);
+          return { type: "magnet", url: location };
+        }
+        if (location?.startsWith("http")) {
+          // Follow HTTP redirects manually
+          console.log(`[Prowlarr] Following redirect to: ${location.substring(0, 100)}...`);
+          const res2 = await fetch(location, {
+            headers: { "X-Api-Key": this.apiKey },
+            redirect: "manual",
+            signal: controller.signal,
+          });
+          // Check for second-level magnet redirect
+          if (res2.status >= 300 && res2.status < 400) {
+            const loc2 = res2.headers.get("location");
+            if (loc2?.startsWith("magnet:")) {
+              console.log(`[Prowlarr] Second redirect to magnet link!`);
+              return { type: "magnet", url: loc2 };
+            }
+            console.error(`[Prowlarr] Too many redirects: ${loc2?.substring(0, 80)}`);
+            return null;
+          }
+          if (res2.ok) {
+            const buf = Buffer.from(await res2.arrayBuffer());
+            if (buf.length > 100) return { type: "file", data: buf };
+            console.error(`[Prowlarr] Downloaded file too small (${buf.length} bytes)`);
+          }
+          return null;
+        }
+        console.error(`[Prowlarr] Unsupported redirect: ${location?.substring(0, 100)}`);
         return null;
       }
-      return Buffer.from(await res.arrayBuffer());
+
+      if (res.ok) {
+        const buf = Buffer.from(await res.arrayBuffer());
+        if (buf.length > 100) return { type: "file", data: buf };
+        console.error(`[Prowlarr] Downloaded file too small (${buf.length} bytes)`);
+        return null;
+      }
+
+      const errText = await res.text().catch(() => "");
+      console.error(`[Prowlarr] Download returned ${res.status}: ${errText.substring(0, 200)}`);
+      return null;
     } catch (e: unknown) {
       const err = e instanceof Error ? e : null;
       const cause = err && "cause" in err ? (err.cause as Error)?.message || String(err.cause) : "unknown";

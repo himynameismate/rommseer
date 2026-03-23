@@ -132,23 +132,27 @@ async function grabTorrent(
     await qbit.addTorrentByUrl(magnet, opts);
     usedMethod = "infoHash-magnet";
   }
-  // Strategy 3: Download .torrent file through Prowlarr, then send to qBit as file
+  // Strategy 3: Download .torrent file through Prowlarr (may return a magnet redirect!)
   else if (r.downloadUrl) {
-    console.log(`[AutoGrab] Downloading .torrent file: ${r.downloadUrl.substring(0, 80)}...`);
-    const file = await prowlarr.downloadFile(r.downloadUrl, r.indexerId);
-    if (file && file.length > 100) {
-      await qbit.addTorrentByFile(file, `${r.title}.torrent`, opts);
+    console.log(`[AutoGrab] Downloading via Prowlarr: ${r.downloadUrl.substring(0, 80)}...`);
+    const result = await prowlarr.downloadFile(r.downloadUrl, r.indexerId);
+
+    if (result?.type === "magnet") {
+      // Prowlarr/indexer redirected to a magnet link (common with public trackers)
+      console.log(`[AutoGrab] Got magnet link from download redirect`);
+      await qbit.addTorrentByUrl(result.url, opts);
+      usedMethod = "redirect-magnet";
+    } else if (result?.type === "file" && result.data.length > 100) {
+      await qbit.addTorrentByFile(result.data, `${r.title}.torrent`, opts);
       usedMethod = "torrent-file";
     } else {
-      // Strategy 4: Use Prowlarr's native grab API — tells Prowlarr to send the release
-      // directly to its own configured download client (bypasses Rommseer entirely)
-      if (file) console.log(`[AutoGrab] Downloaded file too small (${file.length} bytes)`);
-      console.log(`[AutoGrab] Trying Prowlarr-native grab (Prowlarr → download client directly)`);
+      // Strategy 4: Use Prowlarr's native grab API
+      console.log(`[AutoGrab] Download failed, trying Prowlarr-native grab`);
       const grabbed = await prowlarr.grabRelease(r);
       if (grabbed) {
         usedMethod = "prowlarr-native-grab";
       } else {
-        throw new Error("All download methods failed: no magnet/hash, .torrent download failed, Prowlarr grab failed");
+        throw new Error("All download methods failed: no magnet/hash, download failed, Prowlarr grab failed");
       }
     }
   } else {
@@ -173,10 +177,10 @@ async function grabUsenet(
 ): Promise<AutoGrabResult> {
   if (!r.downloadUrl) throw new Error("No download URL for NZB");
 
-  const nzbFile = await prowlarr.downloadFile(r.downloadUrl, r.indexerId);
+  const result = await prowlarr.downloadFile(r.downloadUrl, r.indexerId);
   const opts = { category: category || "rommseer", name: gameName };
-  const nzoIds = nzbFile
-    ? await sabnzbd.addNzbByFile(nzbFile, `${r.title}.nzb`, opts)
+  const nzoIds = result?.type === "file"
+    ? await sabnzbd.addNzbByFile(result.data, `${r.title}.nzb`, opts)
     : await sabnzbd.addNzbByUrl(r.downloadUrl, opts);
 
   const nzbId = nzoIds?.[0] || null;

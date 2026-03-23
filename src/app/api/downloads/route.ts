@@ -75,8 +75,10 @@ export async function POST(req: NextRequest) {
       const opts = { category: settings?.sabnzbdCategory || "rommseer", name: request.game.name };
 
       if (prowlarr) {
-        const file = await prowlarr.downloadFile(magnetUrl, indexerId);
-        const ids = file ? await sabnzbd.addNzbByFile(file, "download.nzb", opts) : await sabnzbd.addNzbByUrl(magnetUrl, opts);
+        const result = await prowlarr.downloadFile(magnetUrl, indexerId);
+        const ids = result?.type === "file"
+          ? await sabnzbd.addNzbByFile(result.data, "download.nzb", opts)
+          : await sabnzbd.addNzbByUrl(magnetUrl, opts);
         nzbId = ids?.[0] || null;
       } else {
         const ids = await sabnzbd.addNzbByUrl(magnetUrl, opts);
@@ -95,9 +97,14 @@ export async function POST(req: NextRequest) {
         await qbit.addTorrentByUrl(magnet, opts);
       } else {
         const prowlarr = await getCachedProwlarrClient();
-        const file = prowlarr ? await prowlarr.downloadFile(magnetUrl, indexerId) : null;
-        if (file) await qbit.addTorrentByFile(file, "download.torrent", opts);
-        else await qbit.addTorrentByUrl(magnetUrl, opts);
+        const result = prowlarr ? await prowlarr.downloadFile(magnetUrl, indexerId) : null;
+        if (result?.type === "magnet") {
+          await qbit.addTorrentByUrl(result.url, opts);
+        } else if (result?.type === "file") {
+          await qbit.addTorrentByFile(result.data, "download.torrent", opts);
+        } else {
+          await qbit.addTorrentByUrl(magnetUrl, opts);
+        }
       }
     }
 
