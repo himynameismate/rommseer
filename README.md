@@ -1,4 +1,4 @@
-# Rommseer
+# Rommseer (WIP)
 
 A self-hosted ROM request management tool — like [Seerr](https://github.com/seerr-app/seerr) but for game ROMs. Integrates with [RomM](https://github.com/rommapp/romm), [Prowlarr](https://github.com/Prowlarr/Prowlarr), [qBittorrent](https://github.com/qbittorrent/qBittorrent), and [SABnzbd](https://sabnzbd.org/) to provide a complete request-to-download pipeline.
 
