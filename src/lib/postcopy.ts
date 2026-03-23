@@ -1,32 +1,9 @@
 import { prisma } from "@/lib/db";
-import { getSABnzbdClient } from "@/lib/sabnzbd";
-import { getQBittorrentClient } from "@/lib/qbittorrent";
-import { getRomMClient } from "@/lib/romm";
+import { getCachedSABnzbdClient, getCachedQBittorrentClient, getCachedRomMClient, debouncedScan } from "@/lib/clients";
+import { formatBytes } from "@/lib/utils";
+import { ROM_EXTENSIONS } from "@/lib/constants";
 import * as fs from "fs";
 import * as path from "path";
-
-/** Platform slug mapping: RomM platform slug → filesystem folder name.
- *  RomM expects ROMs in: <library>/<platform_fs_slug>/<rom_files>
- */
-
-/** Known ROM extensions per platform (reuse from prowlarr.ts concept). */
-const ROM_EXTENSIONS = new Set([
-  // Nintendo
-  ".gb", ".gbc", ".gba", ".nds", ".dsi", ".srl", ".3ds", ".cia", ".cxi", ".cci",
-  ".nes", ".unf", ".unif", ".fds", ".sfc", ".smc", ".fig", ".swc",
-  ".n64", ".z64", ".v64", ".ndd", ".iso", ".gcm", ".gcz", ".rvz", ".nkit", ".ciso",
-  ".wbfs", ".wad", ".wud", ".wux", ".rpx", ".wua", ".nsp", ".xci", ".nsz", ".xcz",
-  ".vb", ".vboy", ".min", ".mgw",
-  // Sony
-  ".pbp", ".cso", ".chd", ".pkg", ".vpk",
-  // Sega
-  ".sms", ".gg", ".md", ".gen", ".smd", ".32x", ".cue", ".gdi", ".cdi",
-  // Other
-  ".a26", ".a52", ".a78", ".lnx", ".pce", ".ngp", ".ngc", ".ws", ".wsc",
-  ".col", ".sg",
-  // Archives that may contain ROMs
-  ".zip", ".7z", ".rar",
-]);
 
 /**
  * After a download completes, copy the ROM file(s) to RomM's library directory.
@@ -124,7 +101,7 @@ export async function copyToRomMLibrary(
         }
       }
 
-      console.log(`[PostCopy] Copying "${filename}" (${formatSize(fs.statSync(srcFile).size)})`);
+      console.log(`[PostCopy] Copying "${filename}" (${formatBytes(fs.statSync(srcFile).size)})`);
       fs.copyFileSync(srcFile, destFile);
       copied++;
     }
@@ -135,6 +112,49 @@ export async function copyToRomMLibrary(
     console.error(`[PostCopy] Failed:`, e instanceof Error ? e.message : e);
     return false;
   }
+}
+
+/**
+ * Copy ROM files to RomM library and trigger a scan (non-blocking).
+ * Shared by both requests/route.ts and downloads/route.ts.
+ */
+export function copyAndScan(requestId: number, downloadId: number): void {
+  copyToRomMLibrary(requestId, downloadId)
+    .then(async (copied) => {
+      if (copied) {
+        console.log(`[PostCopy] Files copied for request #${requestId}, triggering RomM scan`);
+      } else {
+        console.log(`[PostCopy] No files copied for request #${requestId}, triggering RomM scan anyway`);
+      }
+
+      const req = await prisma.request.findUnique({
+        where: { id: requestId },
+        include: { game: { include: { platform: true } } },
+      });
+      if (!req) return;
+
+      const romm = await getCachedRomMClient();
+      if (!romm) return;
+
+      try {
+        const platforms = await romm.getPlatforms();
+        const match = platforms.find((p) =>
+          p.name.toLowerCase() === req.game.platform.name.toLowerCase() ||
+          p.slug.toLowerCase() === req.game.platform.name.toLowerCase().replace(/\s+/g, "-")
+        );
+
+        if (match) {
+          console.log(`[RomM] Scanning platform "${match.name}" (id=${match.id}) for request #${requestId}`);
+          debouncedScan(romm, match.id);
+        } else {
+          console.log(`[RomM] No matching platform for "${req.game.platform.name}", triggering full scan`);
+          debouncedScan(romm);
+        }
+      } catch (e) {
+        console.error(`[RomM] Scan trigger failed for request #${requestId}:`, e);
+      }
+    })
+    .catch((e) => console.error(`[PostCopy] Error for request #${requestId}:`, e));
 }
 
 /** Default path where completed downloads are mounted inside the Rommseer container. */
@@ -149,7 +169,7 @@ async function getSourcePath(
   download: { downloadType: string; nzbId: string | null; torrentHash: string | null; torrentName: string | null }
 ): Promise<string | null> {
   if (download.downloadType === "usenet" && download.nzbId) {
-    const sabnzbd = await getSABnzbdClient();
+    const sabnzbd = await getCachedSABnzbdClient();
     if (!sabnzbd) return null;
     try {
       const history = await sabnzbd.getHistory(100);
@@ -187,10 +207,10 @@ async function getSourcePath(
   }
 
   if (download.torrentHash) {
-    const qbit = await getQBittorrentClient();
+    const qbit = await getCachedQBittorrentClient();
     if (!qbit) return null;
     try {
-      const torrents = await qbit.getTorrents();
+      const torrents = await qbit.getTorrents(undefined, "rommseer");
       const torrent = torrents.find((t) => t.hash === download.torrentHash);
       if (!torrent) return null;
 
@@ -232,7 +252,7 @@ async function getPlatformSlug(
   platform: { name: string; slug: string }
 ): Promise<string | null> {
   try {
-    const romm = await getRomMClient();
+    const romm = await getCachedRomMClient();
     if (romm) {
       const platforms = await romm.getPlatforms();
       const match = platforms.find(
@@ -244,7 +264,7 @@ async function getPlatformSlug(
       if (match) {
         // Use fs_slug (actual folder name on disk) if available, otherwise slug
         const slug = match.fs_slug || match.slug;
-        console.log(`[PostCopy] Matched RomM platform: "${match.name}" → folder "${slug}"`);
+        console.log(`[PostCopy] Matched RomM platform: "${match.name}" -> folder "${slug}"`);
         return slug;
       }
     }
@@ -293,14 +313,7 @@ function scanDirectory(dir: string, results: string[], depth: number): void {
         }
       }
     }
-  } catch (e) {
+  } catch {
     // Permission error or similar, skip
   }
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }

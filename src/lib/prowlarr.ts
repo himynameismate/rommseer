@@ -243,21 +243,30 @@ export class ProwlarrClient {
 
   /** Search with progressive query simplification, returns filtered+sorted results. */
   async searchForRom(gameName: string, platformName?: string, searchTemplate?: string, minSeeders = 0, maxSizeMb = 0): Promise<ProwlarrRelease[]> {
-    const queries = this.buildQueries(gameName, platformName, searchTemplate);
+    // Limit query variants to max 5 to avoid too many API calls (Issue #6)
+    const queries = this.buildQueries(gameName, platformName, searchTemplate).slice(0, 5);
     const seen = new Set<string>();
     const all: ProwlarrRelease[] = [];
 
     for (const q of queries) {
-      const [cat, noCat] = await Promise.all([
-        this.search(q, GAME_CATEGORIES),
-        this.search(q),
-      ]);
+      // Run category search first; only run uncategorized if category returned 0 results (Issue #6)
+      const cat = await this.search(q, GAME_CATEGORIES);
       let added = 0;
-      for (const r of [...cat, ...noCat]) {
+      for (const r of cat) {
         const key = r.guid || `${r.title}-${r.indexer}-${r.size}`;
         if (!seen.has(key)) { seen.add(key); all.push(r); added++; }
       }
-      console.log(`[Prowlarr] "${q}": ${cat.length}+${noCat.length} raw, ${added} new (${all.length} total)`);
+
+      if (cat.length === 0) {
+        const noCat = await this.search(q);
+        for (const r of noCat) {
+          const key = r.guid || `${r.title}-${r.indexer}-${r.size}`;
+          if (!seen.has(key)) { seen.add(key); all.push(r); added++; }
+        }
+        console.log(`[Prowlarr] "${q}": ${cat.length} cat + fallback uncategorized, ${added} new (${all.length} total)`);
+      } else {
+        console.log(`[Prowlarr] "${q}": ${cat.length} cat results, ${added} new (${all.length} total)`);
+      }
     }
 
     const maxSize = maxSizeMb > 0 ? maxSizeMb * 1024 * 1024 : Infinity;
@@ -335,9 +344,5 @@ export async function getProwlarrClient(): Promise<ProwlarrClient | null> {
   return s?.prowlarrUrl && s?.prowlarrApiKey ? new ProwlarrClient(s.prowlarrUrl, s.prowlarrApiKey) : null;
 }
 
-export function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const k = 1024, sizes = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
-}
+// Re-export formatBytes from utils for backward compatibility
+export { formatBytes } from "@/lib/utils";

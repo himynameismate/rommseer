@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { getProwlarrClient } from "@/lib/prowlarr";
+import { getCachedProwlarrClient } from "@/lib/clients";
 
 // GET /api/prowlarr?q=query&platform=platformName - Search Prowlarr for ROMs
 export async function GET(req: NextRequest) {
@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const client = await getProwlarrClient();
+  const client = await getCachedProwlarrClient();
   if (!client) {
     return NextResponse.json(
       { error: "Prowlarr not configured" },

@@ -1,7 +1,6 @@
 import { prisma } from "@/lib/db";
-import { getProwlarrClient, ProwlarrRelease } from "@/lib/prowlarr";
-import { getQBittorrentClient } from "@/lib/qbittorrent";
-import { getSABnzbdClient } from "@/lib/sabnzbd";
+import { ProwlarrRelease } from "@/lib/prowlarr";
+import { getCachedProwlarrClient, getCachedQBittorrentClient, getCachedSABnzbdClient } from "@/lib/clients";
 
 interface AutoGrabResult {
   success: boolean;
@@ -23,16 +22,12 @@ export async function autoGrabForRequest(requestId: number): Promise<AutoGrabRes
     include: { game: { include: { platform: true } } },
   });
   if (!request) return { success: false, message: "Request not found" };
-
-  // Verify request still exists (may have been deleted during retry)
-  const freshCheck = await prisma.request.findUnique({ where: { id: requestId } });
-  if (!freshCheck || freshCheck.status === "DOWNLOADING") {
-    // Already being handled or deleted
-    if (!freshCheck) return { success: false, message: "Request no longer exists" };
+  if (request.status === "DOWNLOADING") {
+    // Already being handled
   }
 
   const [prowlarr, qbit, sabnzbd] = await Promise.all([
-    getProwlarrClient(), getQBittorrentClient(), getSABnzbdClient(),
+    getCachedProwlarrClient(), getCachedQBittorrentClient(), getCachedSABnzbdClient(),
   ]);
   if (!prowlarr) return { success: false, message: "Prowlarr not configured" };
   if (!qbit && !sabnzbd) return { success: false, message: "No download client configured" };
@@ -87,8 +82,8 @@ export async function autoGrabForRequest(requestId: number): Promise<AutoGrabRes
 }
 
 async function grabTorrent(
-  prowlarr: NonNullable<Awaited<ReturnType<typeof getProwlarrClient>>>,
-  qbit: NonNullable<Awaited<ReturnType<typeof getQBittorrentClient>>>,
+  prowlarr: NonNullable<Awaited<ReturnType<typeof getCachedProwlarrClient>>>,
+  qbit: NonNullable<Awaited<ReturnType<typeof getCachedQBittorrentClient>>>,
   r: ProwlarrRelease, requestId: number,
   settings: { qbitCategory: string; qbitSavePath: string }, gameName: string,
 ): Promise<AutoGrabResult> {
@@ -110,8 +105,8 @@ async function grabTorrent(
 }
 
 async function grabUsenet(
-  prowlarr: NonNullable<Awaited<ReturnType<typeof getProwlarrClient>>>,
-  sabnzbd: NonNullable<Awaited<ReturnType<typeof getSABnzbdClient>>>,
+  prowlarr: NonNullable<Awaited<ReturnType<typeof getCachedProwlarrClient>>>,
+  sabnzbd: NonNullable<Awaited<ReturnType<typeof getCachedSABnzbdClient>>>,
   r: ProwlarrRelease, requestId: number, category: string, gameName: string,
 ): Promise<AutoGrabResult> {
   if (!r.downloadUrl) throw new Error("No download URL for NZB");

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,7 +25,7 @@ import {
   RotateCcw,
   Undo2,
 } from "lucide-react";
-import { formatDate, getStatusBadgeVariant } from "@/lib/utils";
+import { formatDate, formatBytes, getStatusBadgeVariant } from "@/lib/utils";
 
 interface RequestItem {
   id: number;
@@ -62,14 +62,6 @@ interface ProwlarrResult {
   grabs: number | null;
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
-}
-
 export default function RequestsPage() {
   const { data: session } = useSession();
   const [requests, setRequests] = useState<RequestItem[]>([]);
@@ -92,17 +84,17 @@ export default function RequestsPage() {
 
   const isAdmin = session?.user?.role === "ADMIN";
 
-  const fetchRequests = async () => {
+  const fetchRequests = useCallback(async () => {
     const params = filter !== "ALL" ? `?status=${filter}` : "";
     const res = await fetch(`/api/requests${params}`);
     const data = await res.json();
     setRequests(data);
     setLoading(false);
-  };
+  }, [filter]);
 
   useEffect(() => {
     fetchRequests();
-  }, [filter]);
+  }, [fetchRequests]);
 
   const updateStatus = async (id: number, status: string) => {
     const res = await fetch(`/api/requests/${id}`, {
