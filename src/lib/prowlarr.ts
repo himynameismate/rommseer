@@ -326,47 +326,55 @@ export class ProwlarrClient {
     return Array.from(new Set(q));
   }
 
-  /** Download a .torrent/.nzb file, proxying through Prowlarr if direct fetch fails. */
+  /**
+   * Rewrite a Prowlarr download URL to use our configured base URL.
+   * Prowlarr returns download URLs with its own hostname (e.g., 192.168.1.3:9696)
+   * which may differ from how Rommseer reaches Prowlarr (e.g., prowlarr:9696).
+   */
+  private rewriteProwlarrUrl(downloadUrl: string): string | null {
+    // Prowlarr download URLs look like: http://host:port/{indexerId}/download?apikey=...&link=...
+    // Match any URL with /{number}/download pattern
+    const match = downloadUrl.match(/^https?:\/\/[^/]+(\/\d+\/download\?.+)$/);
+    if (match) {
+      const rewritten = `${this.baseUrl}${match[1]}`;
+      if (rewritten !== downloadUrl) {
+        console.log(`[Prowlarr] Rewriting download URL to use configured base URL`);
+      }
+      return rewritten;
+    }
+    return null;
+  }
+
+  /** Download a .torrent/.nzb file through Prowlarr. */
   async downloadFile(downloadUrl: string, indexerId?: number): Promise<Buffer | null> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
 
     try {
-      // If the URL already points at our Prowlarr instance, fetch directly
-      const isProwlarrUrl = downloadUrl.startsWith(this.baseUrl);
+      // Check if this is a Prowlarr download URL (/{indexerId}/download?...)
+      // and rewrite it to use our configured base URL (handles hostname mismatches)
+      const rewrittenUrl = this.rewriteProwlarrUrl(downloadUrl);
 
-      if (isProwlarrUrl) {
-        const res = await fetch(downloadUrl, {
+      if (rewrittenUrl) {
+        console.log(`[Prowlarr] Fetching via Prowlarr: ${rewrittenUrl.substring(0, 100)}...`);
+        const res = await fetch(rewrittenUrl, {
           headers: { "X-Api-Key": this.apiKey },
           redirect: "follow",
           signal: controller.signal,
         });
-        if (res.ok) return Buffer.from(await res.arrayBuffer());
-        console.error(`[Prowlarr] Proxied download returned ${res.status}`);
+        if (res.ok) {
+          const buf = Buffer.from(await res.arrayBuffer());
+          if (buf.length > 100) return buf; // Valid .torrent files are >100 bytes
+          console.error(`[Prowlarr] Downloaded file too small (${buf.length} bytes)`);
+          return null;
+        }
+        const errText = await res.text().catch(() => "");
+        console.error(`[Prowlarr] Prowlarr download returned ${res.status}: ${errText.substring(0, 200)}`);
         return null;
       }
 
-      // Try proxying through Prowlarr's indexer download endpoint first
-      if (indexerId) {
-        try {
-          const proxyUrl = `${this.baseUrl}/api/v1/indexer/${indexerId}/download?link=${encodeURIComponent(downloadUrl)}`;
-          console.log(`[Prowlarr] Proxying download through Prowlarr for indexer ${indexerId}`);
-          const res = await fetch(proxyUrl, {
-            headers: { "X-Api-Key": this.apiKey },
-            redirect: "follow",
-            signal: controller.signal,
-          });
-          if (res.ok) {
-            const buf = Buffer.from(await res.arrayBuffer());
-            if (buf.length > 0) return buf;
-          }
-          console.log(`[Prowlarr] Proxy download returned ${res.status}, trying direct`);
-        } catch (proxyErr) {
-          console.log(`[Prowlarr] Proxy download failed: ${proxyErr instanceof Error ? proxyErr.message : proxyErr}`);
-        }
-      }
-
-      // Fallback: try direct fetch
+      // Not a Prowlarr URL — try fetching directly (external indexer URL)
+      console.log(`[Prowlarr] Direct download: ${downloadUrl.substring(0, 100)}...`);
       const res = await fetch(downloadUrl, {
         headers: { "X-Api-Key": this.apiKey },
         redirect: "follow",
