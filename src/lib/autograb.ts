@@ -13,7 +13,21 @@ interface AutoGrabResult {
  * Search Prowlarr and send best result to qBittorrent (torrent) or SABnzbd (usenet).
  * Skips previously failed results and tries up to 5 candidates.
  */
+// Track in-progress grabs to prevent concurrent grabs for the same request
+const activeGrabs = new Set<number>();
+
 export async function autoGrabForRequest(requestId: number): Promise<AutoGrabResult> {
+  // Prevent concurrent auto-grabs for the same request (race condition guard)
+  if (activeGrabs.has(requestId)) return { success: false, message: "Already grabbing" };
+  activeGrabs.add(requestId);
+  try {
+    return await _autoGrabForRequest(requestId);
+  } finally {
+    activeGrabs.delete(requestId);
+  }
+}
+
+async function _autoGrabForRequest(requestId: number): Promise<AutoGrabResult> {
   const settings = await prisma.settings.findUnique({ where: { id: 1 } });
   if (!settings?.prowlarrAutoGrab) return { success: false, message: "Auto-grab not enabled" };
 
@@ -23,7 +37,7 @@ export async function autoGrabForRequest(requestId: number): Promise<AutoGrabRes
   });
   if (!request) return { success: false, message: "Request not found" };
   if (request.status === "DOWNLOADING") {
-    // Already being handled
+    return { success: false, message: "Already downloading" };
   }
 
   const [prowlarr, qbit, sabnzbd] = await Promise.all([
