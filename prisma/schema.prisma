@@ -85,6 +85,7 @@ model Settings {
   prowlarrMinSeeders    Int     @default(1)
   prowlarrMaxSizeMb     Int     @default(0)
   prowlarrPreferredIndexers String @default("")
+  prowlarrSkipFailingIndexers Boolean @default(true)
   sabnzbdUrl            String  @default("")
   sabnzbdApiKey         String  @default("")
   sabnzbdCategory       String  @default("rommseer")

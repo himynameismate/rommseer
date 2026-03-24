@@ -16,6 +16,39 @@ interface AutoGrabResult {
 // Track in-progress grabs to prevent concurrent grabs for the same request
 const activeGrabs = new Set<number>();
 
+// Track indexer failures to skip broken indexers
+// After INDEXER_FAIL_THRESHOLD consecutive download failures, skip results from that indexer
+// for INDEXER_COOLDOWN_MS before trying again
+const INDEXER_FAIL_THRESHOLD = 3;
+const INDEXER_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
+const indexerFailures = new Map<string, { count: number; lastFailure: number }>();
+
+function recordIndexerFailure(indexer: string): void {
+  const existing = indexerFailures.get(indexer) || { count: 0, lastFailure: 0 };
+  existing.count++;
+  existing.lastFailure = Date.now();
+  indexerFailures.set(indexer, existing);
+  if (existing.count >= INDEXER_FAIL_THRESHOLD) {
+    console.log(`[AutoGrab] Indexer "${indexer}" has ${existing.count} consecutive failures — will be skipped for 30 min`);
+  }
+}
+
+function recordIndexerSuccess(indexer: string): void {
+  indexerFailures.delete(indexer);
+}
+
+function isIndexerBlocked(indexer: string): boolean {
+  const record = indexerFailures.get(indexer);
+  if (!record || record.count < INDEXER_FAIL_THRESHOLD) return false;
+  // Reset after cooldown
+  if (Date.now() - record.lastFailure > INDEXER_COOLDOWN_MS) {
+    console.log(`[AutoGrab] Indexer "${indexer}" cooldown expired, retrying`);
+    indexerFailures.delete(indexer);
+    return false;
+  }
+  return true;
+}
+
 export async function autoGrabForRequest(requestId: number): Promise<AutoGrabResult> {
   // Prevent concurrent auto-grabs for the same request (race condition guard)
   if (activeGrabs.has(requestId)) return { success: false, message: "Already grabbing" };
@@ -69,22 +102,38 @@ async function _autoGrabForRequest(requestId: number): Promise<AutoGrabResult> {
       if (pref.length) results.sort((a, b) => +pref.includes(b.indexer.toLowerCase()) - +pref.includes(a.indexer.toLowerCase()));
     }
 
+    // Filter out results from blocked indexers (if enabled)
+    const skipFailing = settings.prowlarrSkipFailingIndexers !== false; // default true
+    const blocked = skipFailing ? results.filter((r) => isIndexerBlocked(r.indexer)) : [];
+    const viable = skipFailing ? results.filter((r) => !isIndexerBlocked(r.indexer)) : results;
+    const blockedIndexerNames = Array.from(new Set(blocked.map((r) => r.indexer))).join(", ");
+    if (blocked.length) console.log(`[AutoGrab] Skipping ${blocked.length} results from blocked indexers: ${blockedIndexerNames}`);
+    if (!viable.length && blocked.length) {
+      return { success: false, message: `All ${results.length} results from blocked indexers (${blockedIndexerNames})` };
+    }
+
     // Try up to 5 results
     let lastErr = "";
-    for (let i = 0; i < Math.min(results.length, 5); i++) {
-      const r = results[i];
-      console.log(`[AutoGrab] Try ${i + 1}: "${r.title}" (${r.protocol}, ${r.indexer}) [magnet:${!!r.magnetUrl}, hash:${!!r.infoHash}, url:${!!r.downloadUrl}]`);
+    let tried = 0;
+    for (let i = 0; i < viable.length && tried < 5; i++) {
+      const r = viable[i];
+      tried++;
+      console.log(`[AutoGrab] Try ${tried}: "${r.title}" (${r.protocol}, ${r.indexer}) [magnet:${!!r.magnetUrl}, hash:${!!r.infoHash}, url:${!!r.downloadUrl}]`);
       try {
+        let result: AutoGrabResult;
         if (r.protocol === "usenet") {
           if (!sabnzbd) { lastErr = "SABnzbd not configured"; continue; }
-          return await grabUsenet(prowlarr, sabnzbd, r, requestId, settings.sabnzbdCategory, request.game.name);
+          result = await grabUsenet(prowlarr, sabnzbd, r, requestId, settings.sabnzbdCategory, request.game.name);
         } else {
           if (!qbit) { lastErr = "qBittorrent not configured"; continue; }
-          return await grabTorrent(prowlarr, qbit, r, requestId, settings, request.game.name);
+          result = await grabTorrent(prowlarr, qbit, r, requestId, settings, request.game.name);
         }
+        if (skipFailing) recordIndexerSuccess(r.indexer);
+        return result;
       } catch (e) {
         lastErr = e instanceof Error ? e.message : "Download failed";
-        console.log(`[AutoGrab] Result ${i + 1} failed: ${lastErr}`);
+        console.log(`[AutoGrab] Result ${tried} failed: ${lastErr}`);
+        if (skipFailing) recordIndexerFailure(r.indexer);
         // If request was deleted mid-grab, stop immediately
         if (lastErr.includes("no longer exists") || lastErr.includes("Foreign key")) {
           return { success: false, message: "Request was deleted" };

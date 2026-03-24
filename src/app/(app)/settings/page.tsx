@@ -41,6 +41,7 @@ interface SettingsData {
   prowlarrMinSeeders: number;
   prowlarrMaxSizeMb: number;
   prowlarrPreferredIndexers: string;
+  prowlarrSkipFailingIndexers: boolean;
   sabnzbdUrl: string;
   sabnzbdApiKey: string;
   sabnzbdCategory: string;
@@ -80,6 +81,7 @@ export default function SettingsPage() {
     prowlarrMinSeeders: 1,
     prowlarrMaxSizeMb: 0,
     prowlarrPreferredIndexers: "",
+    prowlarrSkipFailingIndexers: true,
     sabnzbdUrl: "",
     sabnzbdApiKey: "",
     sabnzbdCategory: "rommseer",
@@ -124,6 +126,7 @@ export default function SettingsPage() {
           prowlarrMinSeeders: data.prowlarrMinSeeders ?? 1,
           prowlarrMaxSizeMb: data.prowlarrMaxSizeMb ?? 0,
           prowlarrPreferredIndexers: data.prowlarrPreferredIndexers ?? "",
+          prowlarrSkipFailingIndexers: data.prowlarrSkipFailingIndexers ?? true,
           sabnzbdUrl: data.sabnzbdUrl ?? "",
           sabnzbdApiKey: data.sabnzbdApiKey ?? "",
           sabnzbdCategory: data.sabnzbdCategory ?? "rommseer",
@@ -165,6 +168,7 @@ export default function SettingsPage() {
           prowlarrMinSeeders: data.prowlarrMinSeeders,
           prowlarrMaxSizeMb: data.prowlarrMaxSizeMb,
           prowlarrPreferredIndexers: data.prowlarrPreferredIndexers,
+          prowlarrSkipFailingIndexers: data.prowlarrSkipFailingIndexers,
           sabnzbdUrl: data.sabnzbdUrl,
           sabnzbdApiKey: data.sabnzbdApiKey,
           sabnzbdCategory: data.sabnzbdCategory,
@@ -642,6 +646,40 @@ export default function SettingsPage() {
                               chosen over others.
                             </p>
                           </div>
+                          <div className="flex items-center gap-3 sm:col-span-2 pt-2">
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={settings.prowlarrSkipFailingIndexers}
+                              onClick={() =>
+                                setSettings((s) => ({
+                                  ...s,
+                                  prowlarrSkipFailingIndexers: !s.prowlarrSkipFailingIndexers,
+                                }))
+                              }
+                              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                                settings.prowlarrSkipFailingIndexers
+                                  ? "bg-primary"
+                                  : "bg-muted-foreground/30"
+                              }`}
+                            >
+                              <span
+                                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition-transform ${
+                                  settings.prowlarrSkipFailingIndexers
+                                    ? "translate-x-5"
+                                    : "translate-x-0"
+                                }`}
+                              />
+                            </button>
+                            <label className="text-sm font-medium">
+                              Skip Failing Indexers
+                            </label>
+                          </div>
+                          <p className="text-xs text-muted-foreground sm:col-span-2">
+                            Automatically skip indexers after 3 consecutive download
+                            failures. They will be retried after 30 minutes. Prevents
+                            wasting time on broken indexers.
+                          </p>
                         </div>
                       )}
                     </div>

@@ -34,6 +34,7 @@ export async function GET() {
       prowlarrMinSeeders: 1,
       prowlarrMaxSizeMb: 0,
       prowlarrPreferredIndexers: "",
+      prowlarrSkipFailingIndexers: true,
       sabnzbdUrl: "",
       sabnzbdApiKey: "",
       sabnzbdCategory: "rommseer",
@@ -88,6 +89,7 @@ export async function PUT(req: NextRequest) {
     prowlarrMinSeeders,
     prowlarrMaxSizeMb,
     prowlarrPreferredIndexers,
+    prowlarrSkipFailingIndexers,
     sabnzbdUrl,
     sabnzbdApiKey,
     sabnzbdCategory,
@@ -149,6 +151,8 @@ export async function PUT(req: NextRequest) {
     data.prowlarrMaxSizeMb = Number(prowlarrMaxSizeMb);
   if (prowlarrPreferredIndexers !== undefined)
     data.prowlarrPreferredIndexers = prowlarrPreferredIndexers;
+  if (prowlarrSkipFailingIndexers !== undefined)
+    data.prowlarrSkipFailingIndexers = prowlarrSkipFailingIndexers;
 
   // SABnzbd
   if (sabnzbdUrl !== undefined) data.sabnzbdUrl = sabnzbdUrl;
@@ -180,6 +184,7 @@ export async function PUT(req: NextRequest) {
       prowlarrMinSeeders: prowlarrMinSeeders ?? 1,
       prowlarrMaxSizeMb: prowlarrMaxSizeMb ?? 0,
       prowlarrPreferredIndexers: prowlarrPreferredIndexers ?? "",
+      prowlarrSkipFailingIndexers: prowlarrSkipFailingIndexers ?? true,
       sabnzbdUrl: sabnzbdUrl ?? "",
       sabnzbdApiKey: sabnzbdApiKey ?? "",
       sabnzbdCategory: sabnzbdCategory ?? "rommseer",
