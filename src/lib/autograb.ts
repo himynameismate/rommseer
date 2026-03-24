@@ -71,12 +71,19 @@ export async function autoGrabForRequest(requestId: number): Promise<AutoGrabRes
       } catch (e) {
         lastErr = e instanceof Error ? e.message : "Download failed";
         console.log(`[AutoGrab] Result ${i + 1} failed: ${lastErr}`);
+        // If request was deleted mid-grab, stop immediately
+        if (lastErr.includes("no longer exists") || lastErr.includes("Foreign key")) {
+          return { success: false, message: "Request was deleted" };
+        }
       }
     }
     return { success: false, message: `All results failed. Last: ${lastErr}` };
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Auto-grab failed";
-    await prisma.download.create({ data: { requestId, status: "FAILED", error: msg } });
+    // Don't try to create a download record if the request was deleted
+    if (!msg.includes("no longer exists") && !msg.includes("Foreign key")) {
+      try { await prisma.download.create({ data: { requestId, status: "FAILED", error: msg } }); } catch { /* request may have been deleted */ }
+    }
     return { success: false, message: msg };
   }
 }
@@ -148,6 +155,10 @@ async function grabTorrent(
   r: ProwlarrRelease, requestId: number,
   settings: { qbitCategory: string; qbitSavePath: string }, gameName: string,
 ): Promise<AutoGrabResult> {
+  // Re-verify request still exists before adding anything to download client
+  const reqCheck = await prisma.request.findUnique({ where: { id: requestId }, select: { id: true } });
+  if (!reqCheck) throw new Error("Request no longer exists (deleted?)");
+
   const category = settings.qbitCategory || "rommseer";
   const opts = { category, savepath: settings.qbitSavePath || undefined, tags: `rommseer,${gameName},auto-grab` };
   let usedMethod = "";
