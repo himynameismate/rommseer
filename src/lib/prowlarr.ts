@@ -153,24 +153,24 @@ function matchesPlatformExtensions(title: string, platformName?: string): boolea
 // Platform keywords/abbreviations that, if found in a result title, indicate a specific platform.
 // Used to detect when a result is for a DIFFERENT platform than requested.
 const PLATFORM_KEYWORDS: Record<string, string[]> = {
-  "game boy advance": ["gba"],
-  "game boy color": ["gbc"],
-  "game boy": ["gb"],
+  "game boy advance": ["gba", "game boy advance"],
+  "game boy color": ["gbc", "game boy color", "gameboy color"],
+  "game boy": ["gb", "game boy", "gameboy"],
   "nintendo ds": ["nds", "nintendo ds"],
   "nintendo dsi": ["nds", "dsi", "nintendo ds"],
-  "nintendo 3ds": ["3ds", "citra"],
+  "nintendo 3ds": ["3ds", "citra", "nintendo 3ds"],
   "new nintendo 3ds": ["3ds", "citra"],
   "nintendo entertainment system": ["nes"],
   "nes": ["nes"],
   "super nintendo entertainment system": ["snes", "sfc", "super nintendo"],
   "super nintendo": ["snes", "sfc", "super nintendo"],
   "snes": ["snes", "sfc"],
-  "nintendo 64": ["n64"],
-  "gamecube": ["gcn", "gamecube", "ngc"],
-  "nintendo gamecube": ["gcn", "gamecube", "ngc"],
-  "wii": ["wii", "virtual console", "wiiware"],
-  "wii u": ["wii u", "wiiu"],
-  "nintendo switch": ["switch", "nsp", "xci"],
+  "nintendo 64": ["n64", "nintendo 64"],
+  "gamecube": ["gcn", "gamecube", "ngc", "nintendo gamecube"],
+  "nintendo gamecube": ["gcn", "gamecube", "ngc", "nintendo gamecube"],
+  "wii": ["wii", "virtual console", "wiiware", "nintendo wii"],
+  "wii u": ["wii u", "wiiu", "nintendo wii u"],
+  "nintendo switch": ["switch", "nsp", "xci", "nintendo switch"],
   "playstation": ["psx", "ps1", "playstation"],
   "playstation 2": ["ps2", "playstation 2"],
   "playstation 3": ["ps3", "playstation 3"],
@@ -280,10 +280,18 @@ function isTitleRelevant(title: string, gameName: string): boolean {
   const simple = clean.replace(/\s*(Version|Edition|Special)\s*/gi, " ").replace(/\s+/g, " ").trim();
 
   // Build normalized name variants
-  const names = Array.from(new Set([gameName, clean, simple].map(normalize))).filter(Boolean);
+  const rawNames = [gameName, clean, simple];
+
+  // Also add "Name, The" variants for ROM database naming convention
+  // "The Legend of Zelda" → "Legend of Zelda The" (how commas normalize: "Legend of Zelda, The" → "legend of zelda the")
+  for (const n of [...rawNames]) {
+    const m = n.match(/^(The|A|An)\s+(.+)$/i);
+    if (m) rawNames.push(`${m[2]} ${m[1]}`);
+  }
+
+  const names = Array.from(new Set(rawNames.map(normalize))).filter(Boolean);
 
   // Title must contain the game name as a contiguous phrase (not scattered words)
-  // e.g., "Advance Wars" must appear as "advance wars" in the title, not "advance...wars" separately
   return names.some((name) => t.includes(name));
 }
 
