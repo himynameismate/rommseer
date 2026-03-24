@@ -27,12 +27,30 @@ export function startBackgroundSync(): void {
     if (bgSyncRunning) return; // Skip if previous sync is still running
     bgSyncRunning = true;
     try {
+      // 1. Check active downloads for completion/stalls
       const downloads = await prisma.download.findMany({
         where: { status: "DOWNLOADING" },
         include: { request: { select: { status: true } } },
       });
       if (downloads.length > 0) {
         await syncAndRetryDownloads(downloads, { useRequestInclude: true });
+      }
+
+      // 2. Pick up APPROVED requests that have no active downloads (auto-grab)
+      const approved = await prisma.request.findMany({
+        where: {
+          status: "APPROVED",
+          downloads: { none: { status: "DOWNLOADING" } },
+        },
+        select: { id: true },
+      });
+      for (const req of approved) {
+        autoGrabForRequest(req.id)
+          .then((r) => {
+            if (r.success) console.log(`[Sync] Auto-grabbed #${req.id}: ${r.message}`);
+            else if (r.message !== "Auto-grab not enabled") console.log(`[Sync] Auto-grab #${req.id}: ${r.message}`);
+          })
+          .catch((e) => console.error(`[Sync] Auto-grab #${req.id} error:`, e));
       }
     } catch (e) {
       console.error("[Sync] Background sync error:", e);
