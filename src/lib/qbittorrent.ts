@@ -207,6 +207,12 @@ export class QBittorrentClient {
         `Failed to add torrent: ${response.status} ${response.statusText}`
       );
     }
+
+    // qBittorrent returns "Ok." for success and "Fails." for failure (both 200)
+    const text = await response.text();
+    if (text.trim().toLowerCase().startsWith("fail")) {
+      throw new Error(`qBittorrent rejected torrent: ${text.trim()}`);
+    }
   }
 
   async addTorrentByFile(
@@ -246,6 +252,11 @@ export class QBittorrentClient {
       throw new Error(
         `Failed to add torrent file: ${response.status} ${response.statusText}`
       );
+    }
+
+    const text = await response.text();
+    if (text.trim().toLowerCase().startsWith("fail")) {
+      throw new Error(`qBittorrent rejected torrent file: ${text.trim()}`);
     }
   }
 

@@ -86,8 +86,8 @@ async function verifyTorrentAdded(
   qbit: NonNullable<Awaited<ReturnType<typeof getCachedQBittorrentClient>>>,
   title: string, category: string, infoHash?: string | null,
 ): Promise<void> {
-  // Give qBit a moment to process the add
-  await new Promise((r) => setTimeout(r, 3000));
+  // Give qBit time to process — magnets need DHT resolution which can take longer
+  await new Promise((r) => setTimeout(r, 8000));
 
   const torrents = await qbit.getTorrents(undefined, category);
   const normalized = title.toLowerCase();
@@ -151,50 +151,72 @@ async function grabTorrent(
   const category = settings.qbitCategory || "rommseer";
   const opts = { category, savepath: settings.qbitSavePath || undefined, tags: `rommseer,${gameName},auto-grab` };
   let usedMethod = "";
+  const errors: string[] = [];
 
-  // Strategy 1: Use magnet URL directly
+  // Build a list of strategies to try, in order of preference
+  const strategies: { name: string; fn: () => Promise<void> }[] = [];
+
   if (r.magnetUrl) {
-    console.log(`[AutoGrab] Using magnet URL`);
-    await qbit.addTorrentByUrl(r.magnetUrl, opts);
-    usedMethod = "magnet";
+    strategies.push({ name: "magnet", fn: async () => {
+      console.log(`[AutoGrab] Using magnet URL: ${r.magnetUrl!.substring(0, 120)}...`);
+      await qbit.addTorrentByUrl(r.magnetUrl!, opts);
+    }});
   }
-  // Strategy 2: Construct magnet from infoHash (most torrent results include this)
-  else if (r.infoHash) {
-    const magnet = `magnet:?xt=urn:btih:${r.infoHash}&dn=${encodeURIComponent(r.title)}`;
-    console.log(`[AutoGrab] Constructed magnet from infoHash: ${r.infoHash}`);
-    await qbit.addTorrentByUrl(magnet, opts);
-    usedMethod = "infoHash-magnet";
+  if (r.infoHash) {
+    strategies.push({ name: "infoHash-magnet", fn: async () => {
+      const magnet = `magnet:?xt=urn:btih:${r.infoHash}&dn=${encodeURIComponent(r.title)}`;
+      console.log(`[AutoGrab] Constructed magnet from infoHash: ${r.infoHash}`);
+      await qbit.addTorrentByUrl(magnet, opts);
+    }});
   }
-  // Strategy 3: Download .torrent file through Prowlarr (may return a magnet redirect!)
-  else if (r.downloadUrl) {
-    console.log(`[AutoGrab] Downloading via Prowlarr: ${r.downloadUrl.substring(0, 80)}...`);
-    const result = await prowlarr.downloadFile(r.downloadUrl, r.indexerId);
-
-    if (result?.type === "magnet") {
-      // Prowlarr/indexer redirected to a magnet link (common with public trackers)
-      console.log(`[AutoGrab] Got magnet link from download redirect`);
-      await qbit.addTorrentByUrl(result.url, opts);
-      usedMethod = "redirect-magnet";
-    } else if (result?.type === "file" && result.data.length > 100) {
-      await qbit.addTorrentByFile(result.data, `${r.title}.torrent`, opts);
-      usedMethod = "torrent-file";
-    } else {
-      // Strategy 4: Use Prowlarr's native grab API
-      console.log(`[AutoGrab] Download failed, trying Prowlarr-native grab`);
-      const grabbed = await prowlarr.grabRelease(r);
-      if (grabbed) {
-        usedMethod = "prowlarr-native-grab";
+  if (r.downloadUrl) {
+    strategies.push({ name: "prowlarr-download", fn: async () => {
+      console.log(`[AutoGrab] Downloading via Prowlarr: ${r.downloadUrl!.substring(0, 80)}...`);
+      const result = await prowlarr.downloadFile(r.downloadUrl!, r.indexerId);
+      if (result?.type === "magnet") {
+        console.log(`[AutoGrab] Got magnet link from download redirect`);
+        await qbit.addTorrentByUrl(result.url, opts);
+        usedMethod = "redirect-magnet";
+      } else if (result?.type === "file" && result.data.length > 100) {
+        await qbit.addTorrentByFile(result.data, `${r.title}.torrent`, opts);
+        usedMethod = "torrent-file";
       } else {
-        throw new Error("All download methods failed: no magnet/hash, download failed, Prowlarr grab failed");
+        throw new Error("Download returned no usable data");
       }
-    }
-  } else {
+    }});
+    strategies.push({ name: "prowlarr-native-grab", fn: async () => {
+      console.log(`[AutoGrab] Trying Prowlarr-native grab`);
+      const grabbed = await prowlarr.grabRelease(r);
+      if (!grabbed) throw new Error("Prowlarr grab failed");
+    }});
+  }
+
+  if (!strategies.length) {
     throw new Error("No download URL, magnet, or infoHash available");
   }
 
-  // Verify the torrent actually appeared in qBittorrent (skip for Prowlarr-native grabs)
-  if (usedMethod !== "prowlarr-native-grab") {
-    await verifyTorrentAdded(qbit, r.title, category, r.infoHash);
+  for (const strategy of strategies) {
+    try {
+      await strategy.fn();
+      if (!usedMethod) usedMethod = strategy.name;
+
+      // Verify the torrent actually appeared (skip for Prowlarr-native grabs)
+      if (usedMethod !== "prowlarr-native-grab") {
+        await verifyTorrentAdded(qbit, r.title, category, r.infoHash);
+      }
+
+      // Success!
+      break;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed";
+      console.log(`[AutoGrab] Strategy ${strategy.name} failed: ${msg}`);
+      errors.push(`${strategy.name}: ${msg}`);
+      usedMethod = "";
+    }
+  }
+
+  if (!usedMethod) {
+    throw new Error(`All download strategies failed: ${errors.join("; ")}`);
   }
 
   await prisma.download.create({ data: { requestId, downloadType: "torrent", magnetUrl: r.magnetUrl || r.downloadUrl, torrentName: r.title, torrentHash: r.infoHash, status: "DOWNLOADING" } });
