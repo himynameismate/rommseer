@@ -175,7 +175,7 @@ const PLATFORM_KEYWORDS: Record<string, string[]> = {
   "nintendo gamecube": ["gcn", "gamecube", "ngc", "nintendo gamecube"],
   "wii": ["wii", "virtual console", "wiiware", "nintendo wii"],
   "wii u": ["wii u", "wiiu", "nintendo wii u"],
-  "nintendo switch": ["switch", "nsp", "xci", "nintendo switch"],
+  "nintendo switch": ["switch", "nsw", "nsp", "xci", "nintendo switch"],
   "playstation": ["psx", "ps1", "playstation"],
   "playstation 2": ["ps2", "playstation 2"],
   "playstation 3": ["ps3", "playstation 3"],
@@ -284,23 +284,54 @@ export function hasPlatformMismatch(title: string, platformName?: string): boole
 function isTitleRelevant(title: string, gameName: string): boolean {
   const normalize = (s: string) => stripAccents(s).toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
   const t = normalize(title);
-  const clean = gameName.split(":")[0].trim();
-  const simple = clean.replace(/\s*(Version|Edition|Special)\s*/gi, " ").replace(/\s+/g, " ").trim();
 
-  // Build normalized name variants
-  const rawNames = [gameName, clean, simple];
+  // Build full-name variants (including subtitle)
+  const fullNames = [gameName];
+  const simple = gameName.replace(/\s*(Version|Edition|Special)\s*/gi, " ").replace(/\s+/g, " ").trim();
+  if (simple !== gameName) fullNames.push(simple);
 
   // Also add "Name, The" variants for ROM database naming convention
-  // "The Legend of Zelda" → "Legend of Zelda The" (how commas normalize: "Legend of Zelda, The" → "legend of zelda the")
-  for (const n of [...rawNames]) {
+  for (const n of [...fullNames]) {
     const m = n.match(/^(The|A|An)\s+(.+)$/i);
-    if (m) rawNames.push(`${m[2]} ${m[1]}`);
+    if (m) fullNames.push(`${m[2]} ${m[1]}`);
   }
 
-  const names = Array.from(new Set(rawNames.map(normalize))).filter(Boolean);
+  const normalizedFull = Array.from(new Set(fullNames.map(normalize))).filter(Boolean);
 
-  // Title must contain the game name as a contiguous phrase (not scattered words)
-  return names.some((name) => t.includes(name));
+  // Check full name match first (most reliable)
+  if (normalizedFull.some((name) => t.includes(name))) return true;
+
+  // If game has a subtitle (colon-separated), require BOTH the franchise name AND
+  // at least some subtitle words. This prevents "The Legend of Zelda" alone from
+  // matching "The Legend of Zelda: Breath of the Wild" when searching for "A Link to the Past".
+  const colonIdx = gameName.indexOf(":");
+  if (colonIdx > 0) {
+    const franchise = normalize(gameName.substring(0, colonIdx));
+    const subtitle = normalize(gameName.substring(colonIdx + 1));
+    if (franchise && subtitle && t.includes(franchise)) {
+      // Extract significant words from subtitle (skip very short words)
+      const subtitleWords = subtitle.split(" ").filter((w) => w.length >= 3);
+      if (subtitleWords.length > 0) {
+        // Require at least half the significant subtitle words to appear in the title
+        const threshold = Math.max(1, Math.ceil(subtitleWords.length * 0.4));
+        const matched = subtitleWords.filter((w) => t.includes(w)).length;
+        if (matched >= threshold) return true;
+      }
+      // Franchise matched but subtitle didn't — NOT relevant
+      return false;
+    }
+  }
+
+  // Fallback for non-subtitle names: try franchise/clean name
+  const clean = gameName.split(":")[0].trim();
+  const cleanSimple = clean.replace(/\s*(Version|Edition|Special)\s*/gi, " ").replace(/\s+/g, " ").trim();
+  const fallbackNames = [clean, cleanSimple];
+  for (const n of [...fallbackNames]) {
+    const m = n.match(/^(The|A|An)\s+(.+)$/i);
+    if (m) fallbackNames.push(`${m[2]} ${m[1]}`);
+  }
+  const normalizedFallback = Array.from(new Set(fallbackNames.map(normalize))).filter(Boolean);
+  return normalizedFallback.some((name) => t.includes(name));
 }
 
 export class ProwlarrClient {
