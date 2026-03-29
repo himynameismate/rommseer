@@ -24,12 +24,19 @@ const INDEXER_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
 const indexerFailures = new Map<string, { count: number; lastFailure: number }>();
 
 function recordIndexerFailure(indexer: string): void {
+  // Prune entries older than cooldown to prevent unbounded growth
+  if (indexerFailures.size > 50) {
+    const now = Date.now();
+    Array.from(indexerFailures.entries()).forEach(([key, val]) => {
+      if (now - val.lastFailure > INDEXER_COOLDOWN_MS * 2) indexerFailures.delete(key);
+    });
+  }
   const existing = indexerFailures.get(indexer) || { count: 0, lastFailure: 0 };
   existing.count++;
   existing.lastFailure = Date.now();
   indexerFailures.set(indexer, existing);
-  if (existing.count >= INDEXER_FAIL_THRESHOLD) {
-    console.log(`[AutoGrab] Indexer "${indexer}" has ${existing.count} consecutive failures — will be skipped for 30 min`);
+  if (existing.count === INDEXER_FAIL_THRESHOLD) {
+    console.log(`[AutoGrab] Indexer "${indexer}" blocked after ${existing.count} failures (30 min cooldown)`);
   }
 }
 
@@ -151,63 +158,41 @@ async function _autoGrabForRequest(requestId: number): Promise<AutoGrabResult> {
   }
 }
 
-/** Wait briefly then check if a torrent actually appeared in qBittorrent */
+/** Check if torrent exists in a list by hash, title, or recent add time */
+function findInTorrents(
+  torrents: { hash: string; name: string; added_on: number }[],
+  normalized: string, hashLower: string | undefined,
+): string | null {
+  if (hashLower && torrents.some((t) => t.hash.toLowerCase() === hashLower)) return "hash";
+  if (torrents.some((t) => {
+    const n = t.name.toLowerCase();
+    return n.includes(normalized) || normalized.includes(n);
+  })) return "title";
+  const now = Math.floor(Date.now() / 1000);
+  if (torrents.find((t) => now - t.added_on < 30)) return "recent";
+  return null;
+}
+
+/** Wait briefly then check if a torrent actually appeared in qBittorrent.
+ *  Uses adaptive timing: quick 2s check first, then 5s retry if needed. */
 async function verifyTorrentAdded(
   qbit: NonNullable<Awaited<ReturnType<typeof getCachedQBittorrentClient>>>,
   title: string, category: string, infoHash?: string | null,
 ): Promise<void> {
-  // Give qBit time to process — magnets need DHT resolution which can take longer
-  await new Promise((r) => setTimeout(r, 8000));
-
-  const torrents = await qbit.getTorrents(undefined, category);
   const normalized = title.toLowerCase();
   const hashLower = infoHash?.toLowerCase();
 
-  // Check by hash first (most reliable — works even before metadata resolves)
-  if (hashLower) {
-    const foundByHash = torrents.some((t) => t.hash.toLowerCase() === hashLower);
-    if (foundByHash) {
-      console.log(`[AutoGrab] Verified torrent appeared in qBittorrent (matched by hash)`);
-      return;
-    }
-  }
+  // Quick check after 2s (catches most successful adds)
+  await new Promise((r) => setTimeout(r, 2000));
+  const torrents = await qbit.getTorrents(undefined, category);
+  let match = findInTorrents(torrents, normalized, hashLower);
+  if (match) { console.log(`[AutoGrab] Verified torrent in qBittorrent (${match})`); return; }
 
-  // Check by title match
-  const found = torrents.some((t) =>
-    t.name.toLowerCase().includes(normalized) || normalized.includes(t.name.toLowerCase())
-  );
-
-  if (found) {
-    console.log(`[AutoGrab] Verified torrent appeared in qBittorrent (matched by title)`);
-    return;
-  }
-
-  // Check without category filter in case category creation failed
+  // Slower retry after 5s more (for magnets needing DHT resolution)
+  await new Promise((r) => setTimeout(r, 5000));
   const all = await qbit.getTorrents();
-  if (hashLower) {
-    const foundByHash = all.some((t) => t.hash.toLowerCase() === hashLower);
-    if (foundByHash) {
-      console.log(`[AutoGrab] Verified torrent appeared in qBittorrent (matched by hash, no category)`);
-      return;
-    }
-  }
-
-  const foundAny = all.some((t) => {
-    const n = t.name.toLowerCase();
-    return n.includes(normalized) || normalized.includes(n);
-  });
-  if (foundAny) {
-    console.log(`[AutoGrab] Verified torrent appeared in qBittorrent (matched by title, no category)`);
-    return;
-  }
-
-  // Check if any very recent torrent was added (within last 30 seconds)
-  const now = Math.floor(Date.now() / 1000);
-  const recentTorrent = all.find((t) => now - t.added_on < 30);
-  if (recentTorrent) {
-    console.log(`[AutoGrab] Verified torrent appeared in qBittorrent (recent add: "${recentTorrent.name}")`);
-    return;
-  }
+  match = findInTorrents(all, normalized, hashLower);
+  if (match) { console.log(`[AutoGrab] Verified torrent in qBittorrent (${match}, retry)`); return; }
 
   throw new Error("Torrent was not actually added to qBittorrent (silent failure)");
 }

@@ -9,34 +9,47 @@ import { autoGrabForRequest } from "@/lib/autograb";
 import { copyAndScan } from "@/lib/postcopy";
 
 // ─── Background sync interval ─────────────────────────────────────────
-const SYNC_INTERVAL_MS = 30_000; // 30 seconds
+const DOWNLOAD_SYNC_MS = 30_000;  // 30s — check active downloads
+const AUTOGRAB_SYNC_MS = 120_000; // 2min — check approved requests for auto-grab
 let bgSyncStarted = false;
 let bgSyncRunning = false;
+let autoGrabRunning = false;
 
 /**
- * Start the background sync loop. Called lazily on first API request.
- * Runs every 30 seconds to detect completed/failed/stalled downloads
- * without requiring the admin to manually open the page.
+ * Start background sync loops. Called lazily on first API request.
+ * Two separate intervals: fast loop for download monitoring, slower loop for auto-grab.
  */
 export function startBackgroundSync(): void {
   if (bgSyncStarted) return;
   bgSyncStarted = true;
-  console.log(`[Sync] Background sync started (every ${SYNC_INTERVAL_MS / 1000}s)`);
+  console.log(`[Sync] Background sync started (downloads: ${DOWNLOAD_SYNC_MS / 1000}s, auto-grab: ${AUTOGRAB_SYNC_MS / 1000}s)`);
 
+  // Fast loop: monitor active downloads for completion/stalls
   setInterval(async () => {
-    if (bgSyncRunning) return; // Skip if previous sync is still running
+    if (bgSyncRunning) return;
     bgSyncRunning = true;
     try {
-      // 1. Check active downloads for completion/stalls
-      const downloads = await prisma.download.findMany({
-        where: { status: "DOWNLOADING" },
-        include: { request: { select: { status: true } } },
-      });
-      if (downloads.length > 0) {
+      // Use count first to avoid expensive query when nothing is downloading
+      const count = await prisma.download.count({ where: { status: "DOWNLOADING" } });
+      if (count > 0) {
+        const downloads = await prisma.download.findMany({
+          where: { status: "DOWNLOADING" },
+          include: { request: { select: { status: true } } },
+        });
         await syncAndRetryDownloads(downloads, { useRequestInclude: true });
       }
+    } catch (e) {
+      console.error("[Sync] Background sync error:", e);
+    } finally {
+      bgSyncRunning = false;
+    }
+  }, DOWNLOAD_SYNC_MS);
 
-      // 2. Pick up APPROVED requests that have no active downloads (auto-grab)
+  // Slower loop: pick up APPROVED requests for auto-grab
+  setInterval(async () => {
+    if (autoGrabRunning) return;
+    autoGrabRunning = true;
+    try {
       const approved = await prisma.request.findMany({
         where: {
           status: "APPROVED",
@@ -48,16 +61,18 @@ export function startBackgroundSync(): void {
         autoGrabForRequest(req.id)
           .then((r) => {
             if (r.success) console.log(`[Sync] Auto-grabbed #${req.id}: ${r.message}`);
-            else if (r.message !== "Auto-grab not enabled") console.log(`[Sync] Auto-grab #${req.id}: ${r.message}`);
+            else if (r.message !== "Auto-grab not enabled" && r.message !== "Already grabbing") {
+              console.log(`[Sync] Auto-grab #${req.id}: ${r.message}`);
+            }
           })
           .catch((e) => console.error(`[Sync] Auto-grab #${req.id} error:`, e));
       }
     } catch (e) {
-      console.error("[Sync] Background sync error:", e);
+      console.error("[Sync] Auto-grab loop error:", e);
     } finally {
-      bgSyncRunning = false;
+      autoGrabRunning = false;
     }
-  }, SYNC_INTERVAL_MS);
+  }, AUTOGRAB_SYNC_MS);
 }
 
 /** Check if a torrent is stalled (no seeds, no peers, no progress) */

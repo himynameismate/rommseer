@@ -224,11 +224,20 @@ function resolveTargetPlatform(platformName: string): { canonicalKeys: Set<strin
 const normalizeForKeywords = (s: string) => s.toLowerCase().replace(/[._\-]+/g, " ").replace(/\s+/g, " ");
 
 // Keywords that indicate a re-release FORMAT (not native ROM).
-// If these appear in a title and the target platform is NOT the format's platform, block it
-// even if the target platform's keyword also appears (e.g., "N64 Virtual Console" is Wii, not N64).
 const FORMAT_OVERRIDE_KEYWORDS: Record<string, string[]> = {
   "wii": ["virtual console", "wiiware", "wii virtual console"],
 };
+
+// Pre-compiled regex cache for keyword matching (avoids recompiling per result)
+const keywordRegexCache = new Map<string, RegExp>();
+function kwRegex(keyword: string): RegExp {
+  let re = keywordRegexCache.get(keyword);
+  if (!re) {
+    re = new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+    keywordRegexCache.set(keyword, re);
+  }
+  return re;
+}
 
 /** Check if a result title mentions a DIFFERENT platform than the one requested */
 export function hasPlatformMismatch(title: string, platformName?: string): boolean {
@@ -243,8 +252,7 @@ export function hasPlatformMismatch(title: string, platformName?: string): boole
   for (const [platform, keywords] of Object.entries(FORMAT_OVERRIDE_KEYWORDS)) {
     if (target.canonicalKeys.has(platform)) continue; // Skip if target IS this platform
     for (const kw of keywords) {
-      const regex = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
-      if (regex.test(tNorm)) return true; // Always block — no target keyword exception
+      if (kwRegex(kw).test(tNorm)) return true; // Always block — no target keyword exception
     }
   }
 
@@ -262,14 +270,9 @@ export function hasPlatformMismatch(title: string, platformName?: string): boole
       // Skip format override keywords (already handled above)
       if (Object.values(FORMAT_OVERRIDE_KEYWORDS).some((fk) => fk.includes(kw))) continue;
 
-      // Check if keyword appears as a distinct word/token in the normalized title
-      const regex = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
-      if (regex.test(tNorm)) {
+      if (kwRegex(kw).test(tNorm)) {
         // Make sure the target platform's keywords don't also match (e.g. "Wii" is in "Wii U")
-        const targetMatches = target.allKeywords.some((tk) => {
-          const tkRegex = new RegExp(`\\b${tk.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
-          return tkRegex.test(tNorm);
-        });
+        const targetMatches = target.allKeywords.some((tk) => kwRegex(tk).test(tNorm));
         if (!targetMatches) return true;
       }
     }
@@ -331,8 +334,8 @@ export class ProwlarrClient {
 
   /** Search with progressive query simplification, returns filtered+sorted results. */
   async searchForRom(gameName: string, platformName?: string, searchTemplate?: string, minSeeders = 0, maxSizeMb = 0): Promise<ProwlarrRelease[]> {
-    // Limit query variants to max 5 to avoid too many API calls (Issue #6)
-    const queries = this.buildQueries(gameName, platformName, searchTemplate).slice(0, 5);
+    // Limit query variants to max 3 to reduce Prowlarr API calls
+    const queries = this.buildQueries(gameName, platformName, searchTemplate).slice(0, 3);
     const seen = new Set<string>();
     const all: ProwlarrRelease[] = [];
 
@@ -358,39 +361,32 @@ export class ProwlarrClient {
     }
 
     const maxSize = maxSizeMb > 0 ? maxSizeMb * 1024 * 1024 : Infinity;
+    const blocked: Record<string, string[]> = { seeders: [], relevance: [], extension: [], wrongExt: [], platform: [] };
     const filtered = all.filter((r) => {
       if (!validUrl(r.downloadUrl, "http://", "https://") && !validUrl(r.magnetUrl, "magnet:", "http")) return false;
-      // Always require at least 1 seeder for torrents (0-seeder torrents will never download)
       if (r.protocol !== "usenet") {
         const effectiveMin = Math.max(minSeeders, 1);
-        if ((r.seeders ?? 0) < effectiveMin) {
-          console.log(`[Prowlarr] BLOCKED "${r.title}": ${r.seeders ?? 0} seeders (need ≥${effectiveMin})`);
-          return false;
-        }
+        if ((r.seeders ?? 0) < effectiveMin) { blocked.seeders.push(r.title); return false; }
       }
       if (r.size > maxSize) return false;
-      // Title must actually contain the game name
-      if (!isTitleRelevant(r.title, gameName)) {
-        console.log(`[Prowlarr] BLOCKED "${r.title}": not relevant to "${gameName}"`);
-        return false;
-      }
-      // Block results with non-ROM file extensions (ebooks, videos, etc.)
-      if (hasBlockedExtension(r.title)) {
-        console.log(`[Prowlarr] BLOCKED "${r.title}": non-ROM file extension`);
-        return false;
-      }
-      // Check platform-specific extensions
-      if (!matchesPlatformExtensions(r.title, platformName)) {
-        console.log(`[Prowlarr] BLOCKED "${r.title}": wrong extension for ${platformName}`);
-        return false;
-      }
-      // Check if title mentions a different platform
-      if (hasPlatformMismatch(r.title, platformName)) {
-        console.log(`[Prowlarr] BLOCKED "${r.title}": different platform than ${platformName}`);
-        return false;
-      }
+      if (!isTitleRelevant(r.title, gameName)) { blocked.relevance.push(r.title); return false; }
+      if (hasBlockedExtension(r.title)) { blocked.extension.push(r.title); return false; }
+      if (!matchesPlatformExtensions(r.title, platformName)) { blocked.wrongExt.push(r.title); return false; }
+      if (hasPlatformMismatch(r.title, platformName)) { blocked.platform.push(r.title); return false; }
       return true;
     });
+
+    // Log blocked results as summary instead of per-result
+    const totalBlocked = Object.values(blocked).reduce((s, a) => s + a.length, 0);
+    if (totalBlocked > 0) {
+      const parts: string[] = [];
+      if (blocked.seeders.length) parts.push(`${blocked.seeders.length} low seeders`);
+      if (blocked.relevance.length) parts.push(`${blocked.relevance.length} irrelevant`);
+      if (blocked.extension.length) parts.push(`${blocked.extension.length} bad extension`);
+      if (blocked.wrongExt.length) parts.push(`${blocked.wrongExt.length} wrong platform ext`);
+      if (blocked.platform.length) parts.push(`${blocked.platform.length} wrong platform`);
+      console.log(`[Prowlarr] Blocked ${totalBlocked}: ${parts.join(", ")}`);
+    }
 
     filtered.sort((a, b) => {
       const score = (r: ProwlarrRelease) => r.protocol === "usenet" ? (r.grabs ?? 0) : (r.seeders ?? 0);
