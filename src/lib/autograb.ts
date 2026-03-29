@@ -232,7 +232,7 @@ async function grabTorrent(
 
   if (r.magnetUrl) {
     strategies.push({ name: "magnet", fn: async () => {
-      console.log(`[AutoGrab] Using magnet URL: ${r.magnetUrl!.substring(0, 120)}...`);
+      console.log(`[AutoGrab] Using magnet URL: ${r.magnetUrl!.replace(/([?&])(apikey|api_key)=[^&]*/gi, "$1$2=***").substring(0, 120)}...`);
       await qbit.addTorrentByUrl(r.magnetUrl!, opts);
     }});
   }
@@ -245,7 +245,7 @@ async function grabTorrent(
   }
   if (r.downloadUrl) {
     strategies.push({ name: "prowlarr-download", fn: async () => {
-      console.log(`[AutoGrab] Downloading via Prowlarr: ${r.downloadUrl!.substring(0, 80)}...`);
+      console.log(`[AutoGrab] Downloading via Prowlarr: ${r.downloadUrl!.replace(/([?&])(apikey|api_key)=[^&]*/gi, "$1$2=***").substring(0, 80)}...`);
       const result = await prowlarr.downloadFile(r.downloadUrl!, r.indexerId);
       if (result?.type === "magnet") {
         console.log(`[AutoGrab] Got magnet link from download redirect`);

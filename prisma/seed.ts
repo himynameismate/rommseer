@@ -1,10 +1,13 @@
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 
 const prisma = new PrismaClient();
 
 async function main() {
-  const hashedPassword = await bcrypt.hash("admin", 12);
+  const randomPassword = crypto.randomBytes(16).toString("base64url");
+  const hashedPassword = await bcrypt.hash(randomPassword, 12);
+  console.log(`Admin password: ${randomPassword}`);
 
   await prisma.user.upsert({
     where: { email: "admin@rommseer.local" },

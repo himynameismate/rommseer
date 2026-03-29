@@ -136,7 +136,13 @@ export async function PUT(req: NextRequest) {
   if (qbitUsername !== undefined) data.qbitUsername = qbitUsername;
   if (qbitPassword && qbitPassword !== "********") data.qbitPassword = qbitPassword;
   if (qbitCategory !== undefined) data.qbitCategory = qbitCategory;
-  if (qbitSavePath !== undefined) data.qbitSavePath = qbitSavePath;
+  if (qbitSavePath !== undefined) {
+    // Validate save path doesn't contain traversal sequences
+    if (qbitSavePath && (qbitSavePath.includes("..") || qbitSavePath.includes("\0"))) {
+      return NextResponse.json({ error: "Invalid save path" }, { status: 400 });
+    }
+    data.qbitSavePath = qbitSavePath;
+  }
 
   // Prowlarr
   if (prowlarrUrl !== undefined) data.prowlarrUrl = prowlarrUrl;
@@ -160,7 +166,12 @@ export async function PUT(req: NextRequest) {
     data.sabnzbdApiKey = sabnzbdApiKey;
   if (sabnzbdCategory !== undefined) data.sabnzbdCategory = sabnzbdCategory;
   if (autoApprove !== undefined) data.autoApprove = autoApprove;
-  if (rommLibraryPath !== undefined) data.rommLibraryPath = rommLibraryPath;
+  if (rommLibraryPath !== undefined) {
+    if (rommLibraryPath && (rommLibraryPath.includes("..") || rommLibraryPath.includes("\0"))) {
+      return NextResponse.json({ error: "Invalid library path" }, { status: 400 });
+    }
+    data.rommLibraryPath = rommLibraryPath;
+  }
 
   const settings = await prisma.settings.upsert({
     where: { id: 1 },

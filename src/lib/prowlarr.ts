@@ -1,5 +1,10 @@
 import { prisma } from "@/lib/db";
 
+/** Strip sensitive query parameters (apikey, api_key) from URLs before logging */
+function sanitizeUrl(url: string): string {
+  return url.replace(/([?&])(apikey|api_key)=[^&]*/gi, "$1$2=***");
+}
+
 export type DownloadFileResult =
   | { type: "file"; data: Buffer }
   | { type: "magnet"; url: string };
@@ -448,7 +453,7 @@ export class ProwlarrClient {
     try {
       // Rewrite Prowlarr download URLs to use our configured base URL
       const url = this.rewriteProwlarrUrl(downloadUrl) || downloadUrl;
-      console.log(`[Prowlarr] Downloading: ${url.substring(0, 120)}...`);
+      console.log(`[Prowlarr] Downloading: ${sanitizeUrl(url).substring(0, 120)}...`);
 
       // Use redirect: "manual" to catch magnet: redirects
       // (Node.js fetch crashes on non-HTTP redirect targets)

@@ -265,8 +265,8 @@ async function getSourcePath(
         path.join(DOWNLOADS_PATH, slot.category, name),       // /downloads/<category>/<name>
       ];
 
-      // Also try the raw storage path in case volumes align
-      if (slot.storage) candidates.push(slot.storage);
+      // Also try the raw storage path in case volumes align (validate it's safe)
+      if (slot.storage && path.resolve(slot.storage).startsWith(DOWNLOADS_PATH)) candidates.push(slot.storage);
 
       for (const candidate of candidates) {
         if (fs.existsSync(candidate)) {
@@ -304,8 +304,8 @@ async function getSourcePath(
         path.join(DOWNLOADS_PATH, torrent.category || "", name), // /downloads/<category>/<name>
       ];
 
-      // Also try the raw content_path in case volumes align
-      if (torrent.content_path) candidates.push(torrent.content_path);
+      // Also try the raw content_path in case volumes align (validate it's safe)
+      if (torrent.content_path && path.resolve(torrent.content_path).startsWith(DOWNLOADS_PATH)) candidates.push(torrent.content_path);
 
       for (const candidate of candidates) {
         if (fs.existsSync(candidate)) {
