@@ -23,7 +23,7 @@ const INDEXER_FAIL_THRESHOLD = 3;
 const INDEXER_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
 const indexerFailures = new Map<string, { count: number; lastFailure: number }>();
 
-function recordIndexerFailure(indexer: string): void {
+export function recordIndexerFailure(indexer: string): void {
   // Prune entries older than cooldown to prevent unbounded growth
   if (indexerFailures.size > 50) {
     const now = Date.now();
@@ -283,7 +283,7 @@ async function grabTorrent(
     throw new Error(`All download strategies failed: ${errors.join("; ")}`);
   }
 
-  await prisma.download.create({ data: { requestId, downloadType: "torrent", magnetUrl: r.magnetUrl || r.downloadUrl, torrentName: r.title, torrentHash: r.infoHash, status: "DOWNLOADING" } });
+  await prisma.download.create({ data: { requestId, downloadType: "torrent", magnetUrl: r.magnetUrl || r.downloadUrl, torrentName: r.title, torrentHash: r.infoHash, indexer: r.indexer, status: "DOWNLOADING" } });
   await prisma.request.update({ where: { id: requestId }, data: { status: "DOWNLOADING" } });
   const via = usedMethod === "prowlarr-native-grab" ? "Prowlarr" : "qBittorrent";
   return { success: true, message: `Grabbed "${r.title}" from ${r.indexer} via ${via} (${usedMethod})`, torrentTitle: r.title, indexer: r.indexer };
@@ -303,7 +303,7 @@ async function grabUsenet(
     : await sabnzbd.addNzbByUrl(r.downloadUrl, opts);
 
   const nzbId = nzoIds?.[0] || null;
-  await prisma.download.create({ data: { requestId, downloadType: "usenet", torrentName: r.title, nzbId, magnetUrl: r.downloadUrl, status: "DOWNLOADING" } });
+  await prisma.download.create({ data: { requestId, downloadType: "usenet", torrentName: r.title, nzbId, magnetUrl: r.downloadUrl, indexer: r.indexer, status: "DOWNLOADING" } });
   await prisma.request.update({ where: { id: requestId }, data: { status: "DOWNLOADING" } });
   return { success: true, message: `Grabbed "${r.title}" from ${r.indexer} via SABnzbd`, torrentTitle: r.title, indexer: r.indexer };
 }

@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { getCachedSABnzbdClient, getCachedQBittorrentClient, getCachedRomMClient, debouncedScan } from "@/lib/clients";
+import { recordIndexerFailure } from "@/lib/autograb";
 import { formatBytes } from "@/lib/utils";
 import { ROM_EXTENSIONS } from "@/lib/constants";
 import { getValidExtensionsForPlatform, hasPlatformMismatch } from "@/lib/prowlarr";
@@ -107,6 +108,7 @@ export async function copyToRomMLibrary(
           data: { status: "APPROVED" },
         });
         console.log(`[PostCopy] Request #${requestId} reset to APPROVED for retry`);
+        if (download.indexer) recordIndexerFailure(download.indexer);
 
         // Delete the wrong files from disk and download client
         await cleanupWrongDownload(download, sourcePath);
@@ -126,6 +128,7 @@ export async function copyToRomMLibrary(
         await prisma.download.update({ where: { id: downloadId }, data: { status: "FAILED", error: msg } });
         await prisma.request.update({ where: { id: requestId }, data: { status: "APPROVED" } });
         console.log(`[PostCopy] Request #${requestId} reset to APPROVED for retry`);
+        if (download.indexer) recordIndexerFailure(download.indexer);
         await cleanupWrongDownload(download, sourcePath);
         return false;
       }

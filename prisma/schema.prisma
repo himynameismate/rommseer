@@ -103,6 +103,7 @@ model Download {
   torrentName  String?
   magnetUrl    String?
   nzbId        String?  // SABnzbd NZO ID for usenet downloads
+  indexer      String?  // Prowlarr indexer name (for failure tracking)
   status       String   @default("PENDING") // PENDING | DOWNLOADING | COMPLETED | FAILED
   progress     Float    @default(0)
   error        String?

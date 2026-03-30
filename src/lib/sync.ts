@@ -5,7 +5,7 @@
  */
 import { prisma } from "@/lib/db";
 import { getCachedSABnzbdClient, getCachedQBittorrentClient } from "@/lib/clients";
-import { autoGrabForRequest } from "@/lib/autograb";
+import { autoGrabForRequest, recordIndexerFailure } from "@/lib/autograb";
 import { copyAndScan } from "@/lib/postcopy";
 
 // ─── Background sync interval ─────────────────────────────────────────
@@ -109,6 +109,7 @@ interface DownloadRecord {
   nzbId: string | null;
   torrentHash: string | null;
   torrentName: string | null;
+  indexer: string | null;
   status: string;
   progress: number;
   createdAt?: Date | string | null;
@@ -160,6 +161,7 @@ export async function syncAndRetryDownloads(
         if (isFailed && hs) {
           downloadUpdates.push({ id: dl.id, data: { status: "FAILED", error: hs.fail_message || hs.status } });
           dl.status = "FAILED";
+          if (dl.indexer) recordIndexerFailure(dl.indexer);
         } else if (hs?.status === "Completed") {
           downloadUpdates.push({ id: dl.id, data: { status: "COMPLETED", progress: 100 } });
           dl.status = "COMPLETED";
@@ -207,6 +209,7 @@ export async function syncAndRetryDownloads(
             console.log(`[Sync] Request #${dl.requestId}: torrent "${dl.torrentName || dl.torrentHash}" not found in qBittorrent after ${Math.round(ageMs / 60000)}min, marking FAILED`);
             downloadUpdates.push({ id: dl.id, data: { status: "FAILED", error: "Torrent not found in qBittorrent (never added or removed)" } });
             dl.status = "FAILED";
+            if (dl.indexer) recordIndexerFailure(dl.indexer);
           }
           continue;
         }
@@ -228,6 +231,8 @@ export async function syncAndRetryDownloads(
           downloadUpdates.push({ id: dl.id, data: { status: "FAILED", progress, error: "Stalled: no seeds or peers available" } });
           dl.status = "FAILED";
           stalledHashes.push(t.hash);
+          // Record indexer failure so consistently-stalling indexers get blocked
+          if (dl.indexer) recordIndexerFailure(dl.indexer);
         } else if (progress !== Math.round(dl.progress)) {
           downloadUpdates.push({ id: dl.id, data: { progress } });
         }
