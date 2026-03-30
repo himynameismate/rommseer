@@ -1,6 +1,5 @@
 import { prisma } from "@/lib/db";
 import { getCachedSABnzbdClient, getCachedQBittorrentClient, getCachedRomMClient, debouncedScan } from "@/lib/clients";
-import { autoGrabForRequest } from "@/lib/autograb";
 import { formatBytes } from "@/lib/utils";
 import { ROM_EXTENSIONS } from "@/lib/constants";
 import { getValidExtensionsForPlatform, hasPlatformMismatch } from "@/lib/prowlarr";
@@ -175,10 +174,7 @@ export function copyAndScan(requestId: number, downloadId: number): void {
       // Check if the download was marked FAILED (wrong platform detection)
       const dl = await prisma.download.findUnique({ where: { id: downloadId }, select: { status: true } });
       if (dl?.status === "FAILED") {
-        console.log(`[PostCopy] Download #${downloadId} was marked FAILED (wrong platform), triggering auto-retry`);
-        autoGrabForRequest(requestId)
-          .then((r) => console.log(`[AutoRetry] #${requestId} (wrong platform):`, r.message))
-          .catch((e) => console.error(`[AutoRetry] #${requestId}:`, e));
+        console.log(`[PostCopy] Download #${downloadId} was marked FAILED (wrong platform), sync loop will retry`);
         return; // Don't trigger scan for failed downloads
       }
 

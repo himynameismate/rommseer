@@ -73,11 +73,15 @@ async function _autoGrabForRequest(requestId: number): Promise<AutoGrabResult> {
 
   const request = await prisma.request.findUnique({
     where: { id: requestId },
-    include: { game: { include: { platform: true } } },
+    include: { game: { include: { platform: true } }, downloads: { select: { id: true } } },
   });
   if (!request) return { success: false, message: "Request not found" };
   if (request.status === "DOWNLOADING") {
     return { success: false, message: "Already downloading" };
+  }
+  // Stop retrying after too many failed attempts
+  if (request.downloads.length >= 5) {
+    return { success: false, message: `Max retries reached (${request.downloads.length} downloads)` };
   }
 
   const [prowlarr, qbit, sabnzbd] = await Promise.all([
@@ -87,16 +91,17 @@ async function _autoGrabForRequest(requestId: number): Promise<AutoGrabResult> {
   if (!qbit && !sabnzbd) return { success: false, message: "No download client configured" };
 
   try {
-    // Exclude previously failed titles
+    // Exclude previously failed titles (normalized to catch minor punctuation differences)
+    const normTitle = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
     const failed = await prisma.download.findMany({ where: { requestId, status: "FAILED" }, select: { torrentName: true } });
-    const failedTitles = new Set(failed.map((d) => d.torrentName).filter(Boolean));
-    if (failedTitles.size) console.log(`[AutoGrab] Excluding ${failedTitles.size} failed:`, Array.from(failedTitles));
+    const failedTitles = new Set(failed.map((d) => normTitle(d.torrentName || "")).filter(Boolean));
+    if (failedTitles.size) console.log(`[AutoGrab] Excluding ${failedTitles.size} previously failed results`);
 
     const allResults = await prowlarr.searchForRom(
       request.game.name, request.game.platform.name,
       settings.prowlarrSearchTemplate || undefined, settings.prowlarrMinSeeders, settings.prowlarrMaxSizeMb,
     );
-    const results = allResults.filter((r) => !failedTitles.has(r.title));
+    const results = allResults.filter((r) => !failedTitles.has(normTitle(r.title)));
 
     if (!results.length) {
       const msg = failedTitles.size ? `No new results (${failedTitles.size} failed excluded)` : `No results for "${request.game.name}"`;
