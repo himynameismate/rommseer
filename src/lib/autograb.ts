@@ -217,20 +217,17 @@ async function grabTorrent(
   let usedMethod = "";
   const errors: string[] = [];
 
-  // Build a list of strategies to try, in order of preference
+  // Build a list of strategies to try, in order of preference.
+  // Priority: real magnet → .torrent file (has web seeds) → constructed magnet → native grab
+  // Prowlarr-download comes before infoHash-magnet so indexers that rely on web seeds
+  // (e.g. Internet Archive) get the .torrent file with web seed URLs, not a bare magnet.
   const strategies: { name: string; fn: () => Promise<void> }[] = [];
 
-  if (r.magnetUrl) {
+  // Only add real magnet: URLs as the magnet strategy (not Prowlarr proxy URLs)
+  if (r.magnetUrl?.startsWith("magnet:")) {
     strategies.push({ name: "magnet", fn: async () => {
-      console.log(`[AutoGrab] Using magnet URL: ${r.magnetUrl!.replace(/([?&])(apikey|api_key)=[^&]*/gi, "$1$2=***").substring(0, 120)}...`);
+      console.log(`[AutoGrab] Using magnet URL: ${r.magnetUrl!.substring(0, 120)}...`);
       await qbit.addTorrentByUrl(r.magnetUrl!, opts);
-    }});
-  }
-  if (r.infoHash) {
-    strategies.push({ name: "infoHash-magnet", fn: async () => {
-      const magnet = `magnet:?xt=urn:btih:${r.infoHash}&dn=${encodeURIComponent(r.title)}`;
-      console.log(`[AutoGrab] Constructed magnet from infoHash: ${r.infoHash}`);
-      await qbit.addTorrentByUrl(magnet, opts);
     }});
   }
   if (r.downloadUrl) {
@@ -248,6 +245,23 @@ async function grabTorrent(
         throw new Error("Download returned no usable data");
       }
     }});
+  }
+  // Fallback: construct magnet from infoHash (no web seeds — last resort for torrent indexers)
+  if (r.infoHash) {
+    strategies.push({ name: "infoHash-magnet", fn: async () => {
+      const magnet = `magnet:?xt=urn:btih:${r.infoHash}&dn=${encodeURIComponent(r.title)}`;
+      console.log(`[AutoGrab] Constructed magnet from infoHash: ${r.infoHash}`);
+      await qbit.addTorrentByUrl(magnet, opts);
+    }});
+  }
+  // Also try passing the Prowlarr proxy URL directly to qBit (works for some indexers)
+  if (r.magnetUrl && !r.magnetUrl.startsWith("magnet:")) {
+    strategies.push({ name: "proxy-url", fn: async () => {
+      console.log(`[AutoGrab] Trying Prowlarr proxy URL directly`);
+      await qbit.addTorrentByUrl(r.magnetUrl!, opts);
+    }});
+  }
+  if (r.downloadUrl) {
     strategies.push({ name: "prowlarr-native-grab", fn: async () => {
       console.log(`[AutoGrab] Trying Prowlarr-native grab`);
       const grabbed = await prowlarr.grabRelease(r);
