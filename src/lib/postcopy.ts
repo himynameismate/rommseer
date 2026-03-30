@@ -108,8 +108,8 @@ export async function copyToRomMLibrary(
         });
         console.log(`[PostCopy] Request #${requestId} reset to APPROVED for retry`);
 
-        // Delete the wrong files from the download client
-        await cleanupWrongDownload(download);
+        // Delete the wrong files from disk and download client
+        await cleanupWrongDownload(download, sourcePath);
         return false;
       }
     }
@@ -126,7 +126,7 @@ export async function copyToRomMLibrary(
         await prisma.download.update({ where: { id: downloadId }, data: { status: "FAILED", error: msg } });
         await prisma.request.update({ where: { id: requestId }, data: { status: "APPROVED" } });
         console.log(`[PostCopy] Request #${requestId} reset to APPROVED for retry`);
-        await cleanupWrongDownload(download);
+        await cleanupWrongDownload(download, sourcePath);
         return false;
       }
     }
@@ -216,12 +216,14 @@ export function copyAndScan(requestId: number, downloadId: number): void {
 
 /**
  * Clean up a download that was for the wrong platform.
- * Removes the torrent/NZB from the download client.
+ * Removes the torrent from qBittorrent and/or deletes downloaded files from disk.
  */
 async function cleanupWrongDownload(
-  download: { downloadType: string; torrentHash: string | null; nzbId: string | null; torrentName: string | null }
+  download: { downloadType: string; torrentHash: string | null; nzbId: string | null; torrentName: string | null },
+  sourcePath?: string,
 ): Promise<void> {
   try {
+    // Remove torrent from qBittorrent (deletes data too)
     if (download.torrentHash) {
       const qbit = await getCachedQBittorrentClient();
       if (qbit) {
@@ -229,7 +231,24 @@ async function cleanupWrongDownload(
         await qbit.deleteTorrents([download.torrentHash], true);
       }
     }
-    // For usenet, SABnzbd auto-cleans completed downloads, so no action needed
+
+    // Delete downloaded files from disk (usenet and any other downloads)
+    if (sourcePath && fs.existsSync(sourcePath)) {
+      // Safety: only delete within the downloads directory
+      const resolved = path.resolve(sourcePath);
+      if (!resolved.startsWith(DOWNLOADS_PATH + path.sep) && resolved !== DOWNLOADS_PATH) {
+        console.log(`[PostCopy] Skipping cleanup: "${resolved}" is outside ${DOWNLOADS_PATH}`);
+        return;
+      }
+      const stat = fs.statSync(sourcePath);
+      if (stat.isDirectory()) {
+        fs.rmSync(sourcePath, { recursive: true, force: true });
+        console.log(`[PostCopy] Deleted wrong-platform directory: ${sourcePath}`);
+      } else {
+        fs.unlinkSync(sourcePath);
+        console.log(`[PostCopy] Deleted wrong-platform file: ${sourcePath}`);
+      }
+    }
   } catch (e) {
     console.error(`[PostCopy] Failed to clean up wrong download:`, e);
   }
