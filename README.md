@@ -74,10 +74,10 @@ volumes:
 
 > **Important: Volume mounts are required** for the post-download copy feature.
 >
-> | Mount | Purpose | Example (Unraid) |
+> | Mount | Purpose |
 > |-------|---------|-----------------|
-> | `/romm/library` | RomM library root — Rommseer copies ROMs here | `/mnt/user/data/romm/library` |
-> | `/downloads` | Download client's completed folder | `/mnt/cache/Downloads/Complete` |
+> | `/romm/library` | RomM library root — Rommseer copies ROMs here |
+> | `/downloads` | Download client's completed folder |
 >
 > After starting, go to **Settings → RomM** and set **Library Path** to `/romm/library`.
 
