@@ -75,7 +75,7 @@ volumes:
 > **Important: Volume mounts are required** for the post-download copy feature.
 >
 > | Mount | Purpose |
-> |-------|---------|-----------------|
+> |-------|---------|
 > | `/romm/library` | RomM library root — Rommseer copies ROMs here |
 > | `/downloads` | Download client's completed folder |
 >
