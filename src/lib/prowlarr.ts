@@ -306,13 +306,23 @@ function isTitleRelevant(title: string, gameName: string): boolean {
   // matching "The Legend of Zelda: Breath of the Wild" when searching for "A Link to the Past".
   const colonIdx = gameName.indexOf(":");
   if (colonIdx > 0) {
-    const franchise = normalize(gameName.substring(0, colonIdx));
+    const franchiseRaw = gameName.substring(0, colonIdx).trim();
     const subtitle = normalize(gameName.substring(colonIdx + 1));
-    if (franchise && subtitle && t.includes(franchise)) {
+    // Build franchise variants: original, "Name, The" form, and without article
+    const franchiseVariants = [franchiseRaw];
+    const artMatch = franchiseRaw.match(/^(The|A|An)\s+(.+)$/i);
+    if (artMatch) {
+      franchiseVariants.push(`${artMatch[2]} ${artMatch[1]}`); // "Legend of Zelda The"
+      franchiseVariants.push(artMatch[2]); // "Legend of Zelda" (no article)
+    }
+    const normalizedFranchises = Array.from(new Set(franchiseVariants.map(normalize))).filter(Boolean);
+
+    const franchiseInTitle = normalizedFranchises.some((f) => t.includes(f));
+    if (franchiseInTitle && subtitle) {
       // Extract significant words from subtitle (skip very short words)
       const subtitleWords = subtitle.split(" ").filter((w) => w.length >= 3);
       if (subtitleWords.length > 0) {
-        // Require at least half the significant subtitle words to appear in the title
+        // Require at least 40% of significant subtitle words to appear in the title
         const threshold = Math.max(1, Math.ceil(subtitleWords.length * 0.4));
         const matched = subtitleWords.filter((w) => t.includes(w)).length;
         if (matched >= threshold) return true;
@@ -322,16 +332,20 @@ function isTitleRelevant(title: string, gameName: string): boolean {
     }
   }
 
-  // Fallback for non-subtitle names: try franchise/clean name
-  const clean = gameName.split(":")[0].trim();
-  const cleanSimple = clean.replace(/\s*(Version|Edition|Special)\s*/gi, " ").replace(/\s+/g, " ").trim();
-  const fallbackNames = [clean, cleanSimple];
-  for (const n of [...fallbackNames]) {
-    const m = n.match(/^(The|A|An)\s+(.+)$/i);
-    if (m) fallbackNames.push(`${m[2]} ${m[1]}`);
+  // Fallback for non-subtitle names only
+  if (gameName.indexOf(":") < 0) {
+    const clean = gameName.trim();
+    const cleanSimple = clean.replace(/\s*(Version|Edition|Special)\s*/gi, " ").replace(/\s+/g, " ").trim();
+    const fallbackNames = [clean, cleanSimple];
+    for (const n of [...fallbackNames]) {
+      const m = n.match(/^(The|A|An)\s+(.+)$/i);
+      if (m) fallbackNames.push(`${m[2]} ${m[1]}`);
+    }
+    const normalizedFallback = Array.from(new Set(fallbackNames.map(normalize))).filter(Boolean);
+    return normalizedFallback.some((name) => t.includes(name));
   }
-  const normalizedFallback = Array.from(new Set(fallbackNames.map(normalize))).filter(Boolean);
-  return normalizedFallback.some((name) => t.includes(name));
+
+  return false;
 }
 
 export class ProwlarrClient {
