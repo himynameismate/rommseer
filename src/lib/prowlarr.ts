@@ -280,6 +280,24 @@ export function hasPlatformMismatch(title: string, platformName?: string): boole
   return false;
 }
 
+// Words/patterns that, when following a game name, indicate a sequel or spin-off
+const SEQUEL_INDICATORS = /^(\s+)(returns|reloaded|revolution|remix|remastered|remake|advance|adventures?|origins?|legends?|saga|chronicles?|collection|trilogy|anthology|plus|deluxe|hd|ii|iii|iv|v|vi|vii|viii|ix|xl?|dx|\d+)\b/i;
+
+/** Check if the text after a game name match indicates a different game (sequel/spin-off) */
+function isSequelMatch(title: string, matchEnd: number): boolean {
+  const after = title.substring(matchEnd);
+  // If nothing follows or only tags/platform info follows, it's a valid match
+  if (!after.trim()) return false;
+  return SEQUEL_INDICATORS.test(after);
+}
+
+/** Find where a name appears in a title, checking it's not a sequel */
+function nameMatchesTitle(name: string, title: string): boolean {
+  const idx = title.indexOf(name);
+  if (idx < 0) return false;
+  return !isSequelMatch(title, idx + name.length);
+}
+
 /** Check if a result title is relevant to the game we're searching for */
 function isTitleRelevant(title: string, gameName: string): boolean {
   const normalize = (s: string) => stripAccents(s).toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
@@ -298,8 +316,8 @@ function isTitleRelevant(title: string, gameName: string): boolean {
 
   const normalizedFull = Array.from(new Set(fullNames.map(normalize))).filter(Boolean);
 
-  // Check full name match first (most reliable)
-  if (normalizedFull.some((name) => t.includes(name))) return true;
+  // Check full name match first (most reliable) — but reject sequels
+  if (normalizedFull.some((name) => nameMatchesTitle(name, t))) return true;
 
   // If game has a subtitle (colon-separated), require BOTH the franchise name AND
   // at least some subtitle words. This prevents "The Legend of Zelda" alone from
@@ -342,7 +360,7 @@ function isTitleRelevant(title: string, gameName: string): boolean {
       if (m) fallbackNames.push(`${m[2]} ${m[1]}`);
     }
     const normalizedFallback = Array.from(new Set(fallbackNames.map(normalize))).filter(Boolean);
-    return normalizedFallback.some((name) => t.includes(name));
+    return normalizedFallback.some((name) => nameMatchesTitle(name, t));
   }
 
   return false;
