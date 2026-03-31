@@ -21,6 +21,7 @@ import {
   Download,
   Newspaper,
   Settings,
+  Bell,
 } from "lucide-react";
 
 interface SettingsData {
@@ -49,6 +50,13 @@ interface SettingsData {
   sabnzbdCategory: string;
   autoApprove: boolean;
   rommLibraryPath: string;
+  discordWebhookUrl: string;
+  notifyOnRequest: boolean;
+  notifyOnApprove: boolean;
+  notifyOnDecline: boolean;
+  notifyOnAvailable: boolean;
+  notifyOnFailed: boolean;
+  librarySyncHours: number;
 }
 
 function ToggleSwitch({ checked, onChange, label, description }: {
@@ -82,7 +90,7 @@ function ToggleSwitch({ checked, onChange, label, description }: {
   );
 }
 
-type TabKey = "general" | "romm" | "igdb" | "prowlarr" | "qbit" | "sabnzbd";
+type TabKey = "general" | "romm" | "igdb" | "prowlarr" | "qbit" | "sabnzbd" | "notifications";
 
 const tabs: { key: TabKey; label: string; icon: React.ReactNode; description: string }[] = [
   { key: "general", label: "General", icon: <Settings className="h-4 w-4" />, description: "General settings" },
@@ -91,6 +99,7 @@ const tabs: { key: TabKey; label: string; icon: React.ReactNode; description: st
   { key: "prowlarr", label: "Prowlarr", icon: <Search className="h-4 w-4" />, description: "Indexer search" },
   { key: "qbit", label: "qBittorrent", icon: <Download className="h-4 w-4" />, description: "Torrent client" },
   { key: "sabnzbd", label: "SABnzbd", icon: <Newspaper className="h-4 w-4" />, description: "Usenet client" },
+  { key: "notifications", label: "Notifications", icon: <Bell className="h-4 w-4" />, description: "Discord & alerts" },
 ];
 
 export default function SettingsPage() {
@@ -122,6 +131,13 @@ export default function SettingsPage() {
     sabnzbdCategory: "rommseer",
     autoApprove: false,
     rommLibraryPath: "",
+    discordWebhookUrl: "",
+    notifyOnRequest: true,
+    notifyOnApprove: true,
+    notifyOnDecline: true,
+    notifyOnAvailable: true,
+    notifyOnFailed: true,
+    librarySyncHours: 6,
   });
   const [saving, setSaving] = useState(false);
   const [testingRomm, setTestingRomm] = useState(false);
@@ -169,6 +185,13 @@ export default function SettingsPage() {
           sabnzbdCategory: data.sabnzbdCategory ?? "rommseer",
           autoApprove: data.autoApprove ?? false,
           rommLibraryPath: data.rommLibraryPath ?? "",
+          discordWebhookUrl: data.discordWebhookUrl ?? "",
+          notifyOnRequest: data.notifyOnRequest ?? true,
+          notifyOnApprove: data.notifyOnApprove ?? true,
+          notifyOnDecline: data.notifyOnDecline ?? true,
+          notifyOnAvailable: data.notifyOnAvailable ?? true,
+          notifyOnFailed: data.notifyOnFailed ?? true,
+          librarySyncHours: data.librarySyncHours ?? 6,
         });
       })
       .catch(console.error);
@@ -213,6 +236,13 @@ export default function SettingsPage() {
           sabnzbdCategory: data.sabnzbdCategory,
           autoApprove: data.autoApprove,
           rommLibraryPath: data.rommLibraryPath ?? "",
+          discordWebhookUrl: data.discordWebhookUrl ?? "",
+          notifyOnRequest: data.notifyOnRequest ?? true,
+          notifyOnApprove: data.notifyOnApprove ?? true,
+          notifyOnDecline: data.notifyOnDecline ?? true,
+          notifyOnAvailable: data.notifyOnAvailable ?? true,
+          notifyOnFailed: data.notifyOnFailed ?? true,
+          librarySyncHours: data.librarySyncHours ?? 6,
         });
         setSaved(true);
         setTimeout(() => setSaved(false), 3000);
@@ -343,6 +373,32 @@ export default function SettingsPage() {
                       admin review. If Prowlarr auto-grab is also enabled, the full
                       pipeline runs automatically: request &rarr; approve &rarr; search &rarr; download.
                     </p>
+                  </div>
+
+                  <div className="border-t pt-4 space-y-4">
+                    <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                      Library Sync
+                    </h3>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Sync Interval (hours)</label>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={168}
+                        value={settings.librarySyncHours}
+                        onChange={(e) =>
+                          setSettings((s) => ({
+                            ...s,
+                            librarySyncHours: Number(e.target.value) || 0,
+                          }))
+                        }
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        How often to sync your RomM library to update game availability.
+                        Games found in RomM will be marked as available automatically.
+                        Set to 0 to disable.
+                      </p>
+                    </div>
                   </div>
                 </div>
               )}
@@ -785,6 +841,71 @@ export default function SettingsPage() {
                     </Button>
                     <ConnectionBadge result={qbitResult} />
                   </div>
+                </div>
+              )}
+
+              {/* Notifications */}
+              {activeTab === "notifications" && (
+                <div className="space-y-6">
+                  <div>
+                    <h2 className="text-lg font-semibold">Notifications</h2>
+                    <p className="text-sm text-muted-foreground">
+                      Configure Discord webhook notifications for request and download events
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Discord Webhook URL</label>
+                    <Input
+                      type="password"
+                      placeholder="https://discord.com/api/webhooks/..."
+                      value={settings.discordWebhookUrl}
+                      onChange={(e) =>
+                        setSettings((s) => ({ ...s, discordWebhookUrl: e.target.value }))
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Create a webhook in Discord: Server Settings &rarr; Integrations &rarr; Webhooks &rarr; New Webhook.
+                      Copy the webhook URL and paste it here.
+                    </p>
+                  </div>
+
+                  {settings.discordWebhookUrl && (
+                    <div className="border-t pt-4 space-y-4">
+                      <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                        Notify On
+                      </h3>
+                      <ToggleSwitch
+                        checked={settings.notifyOnRequest}
+                        onChange={(v) => setSettings((s) => ({ ...s, notifyOnRequest: v }))}
+                        label="New Requests"
+                        description="When a user submits a new game request"
+                      />
+                      <ToggleSwitch
+                        checked={settings.notifyOnApprove}
+                        onChange={(v) => setSettings((s) => ({ ...s, notifyOnApprove: v }))}
+                        label="Approved & Downloads"
+                        description="When a request is approved or a download starts/completes"
+                      />
+                      <ToggleSwitch
+                        checked={settings.notifyOnDecline}
+                        onChange={(v) => setSettings((s) => ({ ...s, notifyOnDecline: v }))}
+                        label="Declined & Cancelled"
+                        description="When a request is declined or cancelled"
+                      />
+                      <ToggleSwitch
+                        checked={settings.notifyOnAvailable}
+                        onChange={(v) => setSettings((s) => ({ ...s, notifyOnAvailable: v }))}
+                        label="Available"
+                        description="When a game becomes available in the library"
+                      />
+                      <ToggleSwitch
+                        checked={settings.notifyOnFailed}
+                        onChange={(v) => setSettings((s) => ({ ...s, notifyOnFailed: v }))}
+                        label="Download Failures"
+                        description="When a download fails or stalls"
+                      />
+                    </div>
+                  )}
                 </div>
               )}
 

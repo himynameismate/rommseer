@@ -24,13 +24,29 @@ import {
   Users,
   RotateCcw,
   Undo2,
+  AlertTriangle,
+  Ban,
+  Clock,
+  MessageSquare,
 } from "lucide-react";
-import { formatDate, formatBytes, getStatusBadgeVariant } from "@/lib/utils";
+import { cn, formatDate, formatBytes, getStatusBadgeVariant } from "@/lib/utils";
+
+interface DownloadInfo {
+  id: number;
+  status: string;
+  progress: number;
+  error: string | null;
+  stalledAt: string | null;
+  downloadType: string;
+  torrentName: string | null;
+  createdAt: string;
+}
 
 interface RequestItem {
   id: number;
   status: string;
   comment: string | null;
+  adminNote: string | null;
   createdAt: string;
   user: { id: string; name: string; email: string };
   game: {
@@ -39,6 +55,7 @@ interface RequestItem {
     coverUrl: string | null;
     platform: { name: string };
   };
+  downloads?: DownloadInfo[];
   autoGrab?: {
     success: boolean;
     message: string;
@@ -80,6 +97,10 @@ export default function RequestsPage() {
   const [searchResults, setSearchResults] = useState<ProwlarrResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [grabbingGuid, setGrabbingGuid] = useState<string | null>(null);
+
+  // Decline modal
+  const [decliningId, setDecliningId] = useState<number | null>(null);
+  const [declineNote, setDeclineNote] = useState("");
 
   // Auto-grab notification
   const [autoGrabMessage, setAutoGrabMessage] = useState<string | null>(null);
@@ -201,6 +222,28 @@ export default function RequestsPage() {
     setGrabbingGuid(null);
   };
 
+  const declineRequest = async (id: number, note: string) => {
+    const res = await fetch(`/api/requests/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "DECLINED", adminNote: note || null }),
+    });
+    if (res.ok) {
+      setDecliningId(null);
+      setDeclineNote("");
+      fetchRequests();
+    }
+  };
+
+  const cancelRequest = async (id: number) => {
+    const res = await fetch(`/api/requests/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "CANCELLED" }),
+    });
+    if (res.ok) fetchRequests();
+  };
+
   const filters = [
     "ALL",
     "PENDING",
@@ -208,6 +251,7 @@ export default function RequestsPage() {
     "DOWNLOADING",
     "DECLINED",
     "AVAILABLE",
+    "CANCELLED",
   ];
 
   return (
@@ -306,6 +350,53 @@ export default function RequestsPage() {
                         &ldquo;{request.comment}&rdquo;
                       </p>
                     )}
+
+                    {/* Download progress / error / stall info */}
+                    {request.downloads?.[0] && (() => {
+                      const dl = request.downloads[0];
+                      const isStalled = !!dl.stalledAt;
+                      const stallMinutes = dl.stalledAt
+                        ? Math.round((Date.now() - new Date(dl.stalledAt).getTime()) / 60000)
+                        : 0;
+
+                      return (
+                        <div className="mt-2 space-y-1">
+                          {/* Progress bar for active downloads */}
+                          {dl.status === "DOWNLOADING" && (
+                            <div className="flex items-center gap-2">
+                              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                                <div
+                                  className={cn(
+                                    "h-full rounded-full transition-all duration-500",
+                                    isStalled ? "bg-yellow-500" : "bg-primary"
+                                  )}
+                                  style={{ width: `${Math.min(100, dl.progress * 100)}%` }}
+                                />
+                              </div>
+                              <span className="text-xs tabular-nums text-muted-foreground">
+                                {(dl.progress * 100).toFixed(1)}%
+                              </span>
+                            </div>
+                          )}
+
+                          {/* Stall indicator */}
+                          {isStalled && dl.status === "DOWNLOADING" && (
+                            <div className="flex items-center gap-1.5 text-xs text-yellow-500">
+                              <Clock className="h-3 w-3" />
+                              <span>Stalled for {stallMinutes}m — will retry automatically</span>
+                            </div>
+                          )}
+
+                          {/* Error message */}
+                          {dl.error && dl.status === "FAILED" && (
+                            <div className="flex items-center gap-1.5 text-xs text-destructive">
+                              <AlertTriangle className="h-3 w-3 flex-shrink-0" />
+                              <span className="truncate" title={dl.error}>{dl.error}</span>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {/* Actions */}
@@ -325,7 +416,10 @@ export default function RequestsPage() {
                           size="icon"
                           variant="ghost"
                           className="text-red-500 hover:text-red-600"
-                          onClick={() => updateStatus(request.id, "DECLINED")}
+                          onClick={() => {
+                            setDecliningId(decliningId === request.id ? null : request.id);
+                            setDeclineNote("");
+                          }}
                           title="Decline"
                         >
                           <XCircle className="h-5 w-5" />
@@ -452,6 +546,18 @@ export default function RequestsPage() {
                         </Button>
                       </>
                     )}
+                    {/* User cancel button for pending requests */}
+                    {!isAdmin && request.status === "PENDING" && request.user.id === session?.user?.id && (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="text-yellow-500 hover:text-yellow-600"
+                        onClick={() => cancelRequest(request.id)}
+                        title="Cancel request"
+                      >
+                        <Ban className="h-4 w-4" />
+                      </Button>
+                    )}
                     <Button
                       size="icon"
                       variant="ghost"
@@ -463,6 +569,58 @@ export default function RequestsPage() {
                     </Button>
                   </div>
                 </div>
+
+                {/* Admin note display */}
+                {request.adminNote && (
+                  <div className="mt-3 flex items-start gap-2 border-t pt-3">
+                    <MessageSquare className="mt-0.5 h-4 w-4 flex-shrink-0 text-muted-foreground" />
+                    <p className="text-sm text-muted-foreground">
+                      <span className="font-medium">Admin note:</span> {request.adminNote}
+                    </p>
+                  </div>
+                )}
+
+                {/* Decline reason form */}
+                {decliningId === request.id && (
+                  <div className="mt-3 border-t pt-3 space-y-2">
+                    <p className="text-sm font-medium">Decline Reason</p>
+                    <div className="flex flex-wrap gap-1">
+                      {["Already in library", "No sources available", "Wrong platform", "Duplicate request"].map((preset) => (
+                        <Button
+                          key={preset}
+                          size="sm"
+                          variant={declineNote === preset ? "default" : "outline"}
+                          className="text-xs"
+                          onClick={() => setDeclineNote(declineNote === preset ? "" : preset)}
+                        >
+                          {preset}
+                        </Button>
+                      ))}
+                    </div>
+                    <Input
+                      placeholder="Custom reason (optional)..."
+                      value={declineNote}
+                      onChange={(e) => setDeclineNote(e.target.value)}
+                    />
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => declineRequest(request.id, declineNote)}
+                      >
+                        <XCircle className="mr-1 h-3 w-3" />
+                        Decline
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => { setDecliningId(null); setDeclineNote(""); }}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Prowlarr search results */}
                 {searchingId === request.id && (

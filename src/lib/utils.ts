@@ -35,6 +35,8 @@ export function getStatusColor(status: string): string {
       return "text-red-500";
     case "AVAILABLE":
       return "text-green-500";
+    case "CANCELLED":
+      return "text-gray-500";
     default:
       return "text-muted-foreground";
   }
@@ -61,6 +63,8 @@ export function getStatusBadgeVariant(
       return "destructive";
     case "AVAILABLE":
       return "default";
+    case "CANCELLED":
+      return "outline";
     default:
       return "outline";
   }

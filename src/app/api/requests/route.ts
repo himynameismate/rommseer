@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { autoGrabForRequest } from "@/lib/autograb";
 import { syncAndRetryDownloads, startBackgroundSync } from "@/lib/sync";
+import { notify, logActivity } from "@/lib/notifications";
 
 // Start background sync on first import (server startup)
 startBackgroundSync();
@@ -21,7 +22,7 @@ export async function GET(req: NextRequest) {
   const isAdmin = session.user.role === "ADMIN";
 
   // Validate status parameter against allowed values
-  const ALLOWED_STATUSES = ["PENDING", "APPROVED", "DECLINED", "AVAILABLE", "DOWNLOADING"];
+  const ALLOWED_STATUSES = ["PENDING", "APPROVED", "DECLINED", "AVAILABLE", "DOWNLOADING", "CANCELLED"];
   if (status && !ALLOWED_STATUSES.includes(status)) {
     return NextResponse.json({ error: "Invalid status filter" }, { status: 400 });
   }
@@ -40,6 +41,20 @@ export async function GET(req: NextRequest) {
     include: {
       game: { include: { platform: true } },
       user: { select: { id: true, name: true, email: true } },
+      downloads: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        select: {
+          id: true,
+          status: true,
+          progress: true,
+          error: true,
+          stalledAt: true,
+          downloadType: true,
+          torrentName: true,
+          createdAt: true,
+        },
+      },
     },
     orderBy: { createdAt: "desc" },
     skip: (page - 1) * limit,
@@ -78,6 +93,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       { error: "gameId is required" },
       { status: 400 }
+    );
+  }
+
+  // Block requests for games already available in the library
+  const game = await prisma.game.findUnique({ where: { id: Number(gameId) }, select: { isAvailable: true } });
+  if (game?.isAvailable) {
+    return NextResponse.json(
+      { error: "This game is already available in the library" },
+      { status: 409 }
     );
   }
 
@@ -121,6 +145,16 @@ export async function POST(req: NextRequest) {
       game: { include: { platform: true } },
       user: { select: { id: true, name: true, email: true } },
     },
+  });
+
+  // Log activity + notify
+  const userName = session.user.name || "Unknown";
+  logActivity("REQUEST_CREATED", `${userName} requested "${request.game.name}"`, {
+    userId: session.user.id, requestId: request.id,
+  });
+  notify({
+    event: "REQUEST_CREATED", gameName: request.game.name, platformName: request.game.platform.name,
+    userName, coverUrl: request.game.coverUrl,
   });
 
   // If auto-approved and auto-grab is enabled, trigger auto-grab in the background

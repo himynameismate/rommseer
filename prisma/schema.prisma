@@ -8,15 +8,16 @@ datasource db {
 }
 
 model User {
-  id             String    @id @default(cuid())
+  id             String     @id @default(cuid())
   name           String
-  email          String    @unique
+  email          String     @unique
   hashedPassword String
-  role           String    @default("USER") // USER | ADMIN
+  role           String     @default("USER") // USER | ADMIN
   avatar         String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
   requests       Request[]
+  activities     Activity[]
 }
 
 model Platform {
@@ -50,16 +51,18 @@ model Game {
 }
 
 model Request {
-  id        Int        @id @default(autoincrement())
-  status    String     @default("PENDING") // PENDING | APPROVED | DECLINED | AVAILABLE | DOWNLOADING
-  userId    String
-  user      User       @relation(fields: [userId], references: [id])
-  gameId    Int
-  game      Game       @relation(fields: [gameId], references: [id])
-  comment   String?
-  downloads Download[]
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
+  id         Int        @id @default(autoincrement())
+  status     String     @default("PENDING") // PENDING | APPROVED | DECLINED | AVAILABLE | DOWNLOADING | CANCELLED
+  userId     String
+  user       User       @relation(fields: [userId], references: [id])
+  gameId     Int
+  game       Game       @relation(fields: [gameId], references: [id])
+  comment    String?
+  adminNote  String?    // Admin note (e.g. decline reason)
+  downloads  Download[]
+  activities Activity[]
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
 
   @@unique([userId, gameId])
   @@index([status])
@@ -93,6 +96,13 @@ model Settings {
   sabnzbdCategory       String  @default("rommseer")
   autoApprove           Boolean @default(false)
   rommLibraryPath       String  @default("") // Path to RomM library root accessible by Rommseer (e.g. /romm/library)
+  discordWebhookUrl     String  @default("")
+  notifyOnRequest       Boolean @default(true)
+  notifyOnApprove       Boolean @default(true)
+  notifyOnDecline       Boolean @default(true)
+  notifyOnAvailable     Boolean @default(true)
+  notifyOnFailed        Boolean @default(true)
+  librarySyncHours      Int     @default(6) // How often to sync RomM library (0 = disabled)
   initialized           Boolean @default(false)
 }
 
@@ -117,4 +127,21 @@ model Download {
   @@index([torrentHash])
   @@index([nzbId])
   @@index([status])
+}
+
+model Activity {
+  id         Int      @id @default(autoincrement())
+  type       String   // REQUEST_CREATED | APPROVED | DECLINED | CANCELLED | DOWNLOAD_STARTED | DOWNLOAD_COMPLETED | DOWNLOAD_FAILED | DOWNLOAD_STALLED | AVAILABLE | RETRY
+  message    String
+  metadata   String?  // JSON string for extra data
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  requestId  Int?
+  request    Request? @relation(fields: [requestId], references: [id])
+  downloadId Int?
+  createdAt  DateTime @default(now())
+
+  @@index([requestId])
+  @@index([createdAt])
+  @@index([type])
 }

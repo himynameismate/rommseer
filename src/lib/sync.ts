@@ -5,16 +5,20 @@
  */
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/utils";
-import { getCachedSABnzbdClient, getCachedQBittorrentClient } from "@/lib/clients";
+import { getCachedSABnzbdClient, getCachedQBittorrentClient, getCachedRomMClient } from "@/lib/clients";
 import { autoGrabForRequest, recordIndexerFailure } from "@/lib/autograb";
 import { copyAndScan } from "@/lib/postcopy";
+import { logActivity, notify } from "@/lib/notifications";
 
 // ─── Background sync interval ─────────────────────────────────────────
 const DOWNLOAD_SYNC_MS = 30_000;  // 30s — check active downloads
 const AUTOGRAB_SYNC_MS = 120_000; // 2min — check approved requests for auto-grab
+const LIBRARY_SYNC_CHECK_MS = 300_000; // 5min — check if library sync is due
 let bgSyncStarted = false;
 let bgSyncRunning = false;
 let autoGrabRunning = false;
+let librarySyncRunning = false;
+let lastLibrarySync = 0;
 
 /**
  * Start background sync loops. Called lazily on first API request.
@@ -74,6 +78,83 @@ export function startBackgroundSync(): void {
       autoGrabRunning = false;
     }
   }, AUTOGRAB_SYNC_MS);
+
+  // Library sync loop: periodically sync RomM library to update game availability
+  setInterval(async () => {
+    if (librarySyncRunning) return;
+    try {
+      const settings = await prisma.settings.findUnique({ where: { id: 1 } });
+      const syncHours = settings?.librarySyncHours ?? 6;
+      if (syncHours <= 0) return; // Disabled
+
+      const syncMs = syncHours * 60 * 60 * 1000;
+      if (Date.now() - lastLibrarySync < syncMs) return;
+
+      librarySyncRunning = true;
+      lastLibrarySync = Date.now();
+      await syncRomMLibrary();
+    } catch (e) {
+      logger.error("[Sync] Library sync error:", e);
+    } finally {
+      librarySyncRunning = false;
+    }
+  }, LIBRARY_SYNC_CHECK_MS);
+}
+
+/**
+ * Sync RomM library: fetch all ROMs, match against local Game records,
+ * and update isAvailable + rommId fields.
+ */
+async function syncRomMLibrary(): Promise<void> {
+  const romm = await getCachedRomMClient();
+  if (!romm) return;
+
+  logger.log("[LibrarySync] Starting RomM library sync...");
+
+  try {
+    const platforms = await romm.getPlatforms();
+    let totalUpdated = 0;
+
+    for (const platform of platforms) {
+      if (platform.rom_count === 0) continue;
+
+      try {
+        const roms = await romm.getRoms(platform.id);
+
+        // Match roms against local games by igdbId or name
+        for (const rom of roms) {
+          if (rom.igdb_id) {
+            const updated = await prisma.game.updateMany({
+              where: { igdbId: rom.igdb_id, isAvailable: false },
+              data: { isAvailable: true, rommId: rom.id },
+            });
+            totalUpdated += updated.count;
+          } else {
+            // Fallback: match by name (case-insensitive via lowercase comparison)
+            const games = await prisma.game.findMany({
+              where: { isAvailable: false },
+              select: { id: true, name: true },
+            });
+            for (const game of games) {
+              if (game.name.toLowerCase() === rom.name.toLowerCase()) {
+                await prisma.game.update({
+                  where: { id: game.id },
+                  data: { isAvailable: true, rommId: rom.id },
+                });
+                totalUpdated++;
+              }
+            }
+          }
+        }
+      } catch (e) {
+        logger.error(`[LibrarySync] Failed to sync platform "${platform.name}":`, e instanceof Error ? e.message : e);
+      }
+    }
+
+    logger.log(`[LibrarySync] Complete — ${totalUpdated} game(s) marked as available`);
+  } catch (e) {
+    logger.error("[LibrarySync] Failed:", e instanceof Error ? e.message : e);
+  }
 }
 
 /** Check if a torrent is currently showing stall symptoms (used to start/reset the stalledAt timer) */
@@ -267,6 +348,25 @@ export async function syncAndRetryDownloads(
       logger.log(`[Sync] Removing ${stalledHashes.length} stalled/failed torrent(s) from qBittorrent`);
       await qbit.deleteTorrents(stalledHashes, true);
     } catch (e) { logger.error("[Sync] Failed to remove stalled torrents:", e); }
+  }
+
+  // Log activities for status changes and notify
+  for (const u of downloadUpdates) {
+    if (u.data.status === "COMPLETED") {
+      const dl = downloads.find((d) => d.id === u.id);
+      if (dl) {
+        logActivity("DOWNLOAD_COMPLETED", `Download completed for request #${dl.requestId}`, {
+          requestId: dl.requestId, downloadId: dl.id,
+        });
+      }
+    } else if (u.data.status === "FAILED" && u.data.error) {
+      const dl = downloads.find((d) => d.id === u.id);
+      if (dl) {
+        logActivity("DOWNLOAD_FAILED", `Download failed: ${u.data.error}`, {
+          requestId: dl.requestId, downloadId: dl.id, metadata: { error: u.data.error },
+        });
+      }
+    }
   }
 
   for (const { requestId, downloadId } of completedPairs) {

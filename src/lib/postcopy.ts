@@ -3,6 +3,7 @@ import { logger } from "@/lib/utils";
 import { getCachedSABnzbdClient, getCachedQBittorrentClient, getCachedRomMClient, debouncedScan } from "@/lib/clients";
 import { recordIndexerFailure } from "@/lib/autograb";
 import { formatBytes } from "@/lib/utils";
+import { logActivity, notify } from "@/lib/notifications";
 import { ROM_EXTENSIONS } from "@/lib/constants";
 import { getValidExtensionsForPlatform, hasPlatformMismatch } from "@/lib/prowlarr";
 import * as fs from "fs";
@@ -168,9 +169,19 @@ export function copyAndScan(requestId: number, downloadId: number): void {
 
       const req = await prisma.request.findUnique({
         where: { id: requestId },
-        include: { game: { include: { platform: true } } },
+        include: { game: { include: { platform: true } }, user: { select: { name: true } } },
       });
       if (!req) return;
+
+      // Log activity + notify
+      logActivity("AVAILABLE", `"${req.game.name}" is now available`, { requestId });
+      notify({
+        event: "AVAILABLE",
+        gameName: req.game.name,
+        platformName: req.game.platform.name,
+        userName: req.user?.name || "System",
+        coverUrl: req.game.coverUrl,
+      });
 
       const romm = await getCachedRomMClient();
       if (!romm) return;

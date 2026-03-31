@@ -43,6 +43,13 @@ export async function GET() {
       sabnzbdCategory: "rommseer",
       autoApprove: false,
       rommLibraryPath: "",
+      discordWebhookUrl: "",
+      notifyOnRequest: true,
+      notifyOnApprove: true,
+      notifyOnDecline: true,
+      notifyOnAvailable: true,
+      notifyOnFailed: true,
+      librarySyncHours: 6,
       initialized: false,
     });
   }
@@ -93,10 +100,17 @@ export async function PUT(req: NextRequest) {
     sabnzbdCategory,
     autoApprove,
     rommLibraryPath,
+    discordWebhookUrl,
+    notifyOnRequest,
+    notifyOnApprove,
+    notifyOnDecline,
+    notifyOnAvailable,
+    notifyOnFailed,
+    librarySyncHours,
   } = body;
 
   // Validate URL fields use http:// or https:// schemes only
-  const urlFields: Record<string, unknown> = { rommUrl, prowlarrUrl, qbitUrl, sabnzbdUrl };
+  const urlFields: Record<string, unknown> = { rommUrl, prowlarrUrl, qbitUrl, sabnzbdUrl, discordWebhookUrl };
   for (const [fieldName, value] of Object.entries(urlFields)) {
     if (value !== undefined && value !== null && value !== "") {
       const urlStr = String(value);
@@ -166,6 +180,15 @@ export async function PUT(req: NextRequest) {
     data.rommLibraryPath = rommLibraryPath;
   }
 
+  // Discord & notifications
+  if (discordWebhookUrl !== undefined) data.discordWebhookUrl = discordWebhookUrl;
+  if (notifyOnRequest !== undefined) data.notifyOnRequest = notifyOnRequest;
+  if (notifyOnApprove !== undefined) data.notifyOnApprove = notifyOnApprove;
+  if (notifyOnDecline !== undefined) data.notifyOnDecline = notifyOnDecline;
+  if (notifyOnAvailable !== undefined) data.notifyOnAvailable = notifyOnAvailable;
+  if (notifyOnFailed !== undefined) data.notifyOnFailed = notifyOnFailed;
+  if (librarySyncHours !== undefined) data.librarySyncHours = Number(librarySyncHours);
+
   const settings = await prisma.settings.upsert({
     where: { id: 1 },
     create: {
@@ -196,6 +219,13 @@ export async function PUT(req: NextRequest) {
       sabnzbdCategory: sabnzbdCategory ?? "rommseer",
       autoApprove: autoApprove ?? false,
       rommLibraryPath: rommLibraryPath ?? "",
+      discordWebhookUrl: discordWebhookUrl ?? "",
+      notifyOnRequest: notifyOnRequest ?? true,
+      notifyOnApprove: notifyOnApprove ?? true,
+      notifyOnDecline: notifyOnDecline ?? true,
+      notifyOnAvailable: notifyOnAvailable ?? true,
+      notifyOnFailed: notifyOnFailed ?? true,
+      librarySyncHours: librarySyncHours ?? 6,
       initialized: true,
     },
     update: data,
