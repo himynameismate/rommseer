@@ -16,3 +16,18 @@ export const ROM_EXTENSIONS = new Set([
   // Archives that may contain ROMs
   ".zip", ".7z", ".rar",
 ]);
+
+/** Fields masked with "********" in API responses. */
+export const SECRET_FIELDS = ["rommPassword", "igdbClientSecret", "qbitPassword", "prowlarrApiKey", "sabnzbdApiKey"] as const;
+
+/** Mask sensitive fields for API responses. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function maskSecrets(settings: Record<string, any>): Record<string, any> {
+  const result = { ...settings };
+  for (const key of SECRET_FIELDS) {
+    if (key in result) {
+      result[key] = result[key] ? "********" : "";
+    }
+  }
+  return result;
+}

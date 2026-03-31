@@ -634,5 +634,3 @@ export function getValidExtensionsForPlatform(platformName: string): string[] | 
   return null;
 }
 
-// Re-export formatBytes from utils for backward compatibility
-export { formatBytes } from "@/lib/utils";

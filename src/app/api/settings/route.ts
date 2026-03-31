@@ -7,6 +7,7 @@ import { QBittorrentClient } from "@/lib/qbittorrent";
 import { ProwlarrClient } from "@/lib/prowlarr";
 import { SABnzbdClient } from "@/lib/sabnzbd";
 import { applyRateLimit } from "@/lib/rate-limit";
+import { maskSecrets, SECRET_FIELDS } from "@/lib/constants";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -46,14 +47,7 @@ export async function GET() {
     });
   }
 
-  return NextResponse.json({
-    ...settings,
-    rommPassword: settings.rommPassword ? "********" : "",
-    igdbClientSecret: settings.igdbClientSecret ? "********" : "",
-    qbitPassword: settings.qbitPassword ? "********" : "",
-    prowlarrApiKey: settings.prowlarrApiKey ? "********" : "",
-    sabnzbdApiKey: settings.sabnzbdApiKey ? "********" : "",
-  });
+  return NextResponse.json(maskSecrets(settings));
 }
 
 export async function PUT(req: NextRequest) {
@@ -128,17 +122,14 @@ export async function PUT(req: NextRequest) {
   // RomM
   if (rommUrl !== undefined) data.rommUrl = rommUrl;
   if (rommUsername !== undefined) data.rommUsername = rommUsername;
-  if (rommPassword && rommPassword !== "********") data.rommPassword = rommPassword;
+  // Handle secret fields — don't overwrite with masked values
+  for (const key of SECRET_FIELDS) {
+    if (body[key] && body[key] !== "********") data[key] = body[key];
+  }
 
-  // IGDB
   if (igdbClientId !== undefined) data.igdbClientId = igdbClientId;
-  if (igdbClientSecret && igdbClientSecret !== "********")
-    data.igdbClientSecret = igdbClientSecret;
-
-  // qBittorrent
   if (qbitUrl !== undefined) data.qbitUrl = qbitUrl;
   if (qbitUsername !== undefined) data.qbitUsername = qbitUsername;
-  if (qbitPassword && qbitPassword !== "********") data.qbitPassword = qbitPassword;
   if (qbitCategory !== undefined) data.qbitCategory = qbitCategory;
   if (qbitSavePath !== undefined) {
     // Validate save path doesn't contain traversal sequences
@@ -150,8 +141,6 @@ export async function PUT(req: NextRequest) {
 
   // Prowlarr
   if (prowlarrUrl !== undefined) data.prowlarrUrl = prowlarrUrl;
-  if (prowlarrApiKey && prowlarrApiKey !== "********")
-    data.prowlarrApiKey = prowlarrApiKey;
   if (prowlarrAutoGrab !== undefined) data.prowlarrAutoGrab = prowlarrAutoGrab;
   if (prowlarrSearchTemplate !== undefined)
     data.prowlarrSearchTemplate = prowlarrSearchTemplate;
@@ -168,8 +157,6 @@ export async function PUT(req: NextRequest) {
 
   // SABnzbd
   if (sabnzbdUrl !== undefined) data.sabnzbdUrl = sabnzbdUrl;
-  if (sabnzbdApiKey && sabnzbdApiKey !== "********")
-    data.sabnzbdApiKey = sabnzbdApiKey;
   if (sabnzbdCategory !== undefined) data.sabnzbdCategory = sabnzbdCategory;
   if (autoApprove !== undefined) data.autoApprove = autoApprove;
   if (rommLibraryPath !== undefined) {
@@ -214,14 +201,7 @@ export async function PUT(req: NextRequest) {
     update: data,
   });
 
-  return NextResponse.json({
-    ...settings,
-    rommPassword: settings.rommPassword ? "********" : "",
-    igdbClientSecret: settings.igdbClientSecret ? "********" : "",
-    qbitPassword: settings.qbitPassword ? "********" : "",
-    prowlarrApiKey: settings.prowlarrApiKey ? "********" : "",
-    sabnzbdApiKey: settings.sabnzbdApiKey ? "********" : "",
-  });
+  return NextResponse.json(maskSecrets(settings));
 }
 
 export async function POST(req: NextRequest) {

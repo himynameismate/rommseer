@@ -16,14 +16,23 @@ interface CacheEntry<T> {
 
 const CACHE_TTL = 30_000; // 30 seconds
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let settingsCache: CacheEntry<any> | null = null;
 let sabCache: CacheEntry<SABnzbdClient | null> | null = null;
 let qbitCache: CacheEntry<QBittorrentClient | null> | null = null;
 let rommCache: CacheEntry<RomMClient | null> | null = null;
 let prowlarrCache: CacheEntry<ProwlarrClient | null> | null = null;
 
+async function getCachedSettings() {
+  if (settingsCache && Date.now() < settingsCache.expiresAt) return settingsCache.instance;
+  const s = await prisma.settings.findUnique({ where: { id: 1 } });
+  settingsCache = { instance: s, expiresAt: Date.now() + CACHE_TTL };
+  return s;
+}
+
 export async function getCachedSABnzbdClient(): Promise<SABnzbdClient | null> {
   if (sabCache && Date.now() < sabCache.expiresAt) return sabCache.instance;
-  const settings = await prisma.settings.findUnique({ where: { id: 1 } });
+  const settings = await getCachedSettings();
   const instance = settings?.sabnzbdUrl && settings?.sabnzbdApiKey
     ? new SABnzbdClient(settings.sabnzbdUrl, settings.sabnzbdApiKey)
     : null;
@@ -33,7 +42,7 @@ export async function getCachedSABnzbdClient(): Promise<SABnzbdClient | null> {
 
 export async function getCachedQBittorrentClient(): Promise<QBittorrentClient | null> {
   if (qbitCache && Date.now() < qbitCache.expiresAt) return qbitCache.instance;
-  const settings = await prisma.settings.findUnique({ where: { id: 1 } });
+  const settings = await getCachedSettings();
   const instance = settings?.qbitUrl && settings?.qbitUsername && settings?.qbitPassword
     ? new QBittorrentClient(settings.qbitUrl, settings.qbitUsername, settings.qbitPassword)
     : null;
@@ -43,7 +52,7 @@ export async function getCachedQBittorrentClient(): Promise<QBittorrentClient | 
 
 export async function getCachedRomMClient(): Promise<RomMClient | null> {
   if (rommCache && Date.now() < rommCache.expiresAt) return rommCache.instance;
-  const settings = await prisma.settings.findUnique({ where: { id: 1 } });
+  const settings = await getCachedSettings();
   const instance = settings?.rommUrl
     ? new RomMClient(settings.rommUrl, settings.rommUsername, settings.rommPassword)
     : null;
@@ -53,7 +62,7 @@ export async function getCachedRomMClient(): Promise<RomMClient | null> {
 
 export async function getCachedProwlarrClient(): Promise<ProwlarrClient | null> {
   if (prowlarrCache && Date.now() < prowlarrCache.expiresAt) return prowlarrCache.instance;
-  const settings = await prisma.settings.findUnique({ where: { id: 1 } });
+  const settings = await getCachedSettings();
   const instance = settings?.prowlarrUrl && settings?.prowlarrApiKey
     ? new ProwlarrClient(settings.prowlarrUrl, settings.prowlarrApiKey)
     : null;
@@ -66,12 +75,10 @@ let pendingScanTimeout: ReturnType<typeof setTimeout> | null = null;
 let pendingScanPlatformId: number | null = null;
 
 export function debouncedScan(romm: RomMClient, platformId?: number): void {
-  // If there's already a pending scan, clear it and use the broader scope
   if (pendingScanTimeout) {
     clearTimeout(pendingScanTimeout);
-    // If one wants a specific platform and one wants all, do all
     if (pendingScanPlatformId !== undefined && platformId !== pendingScanPlatformId) {
-      platformId = undefined; // full scan
+      platformId = undefined;
     }
   }
   pendingScanPlatformId = platformId ?? null;

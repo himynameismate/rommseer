@@ -72,11 +72,7 @@ export async function copyToRomMLibrary(
   logger.log(`[PostCopy] Copying from "${sourcePath}" to "${destDir}" for request #${requestId}`);
 
   try {
-    // Ensure destination directory exists
-    if (!fs.existsSync(destDir)) {
-      fs.mkdirSync(destDir, { recursive: true });
-      logger.log(`[PostCopy] Created directory: ${destDir}`);
-    }
+    fs.mkdirSync(destDir, { recursive: true });
 
     // Collect ROM files from source
     const romFiles = findRomFiles(sourcePath);
@@ -95,43 +91,20 @@ export async function copyToRomMLibrary(
       });
 
       if (wrongFiles.length > 0 && wrongFiles.length === romFiles.length) {
-        // ALL ROM files have wrong extensions — this is the wrong platform
         const foundExts = wrongFiles.map((f) => path.extname(f).toLowerCase()).join(", ");
         const msg = `Wrong platform: downloaded files have extensions [${foundExts}] but expected [${validExts.join(", ")}] for "${platformName}"`;
-        logger.error(`[PostCopy] ${msg}`);
-
-        // Mark download as FAILED so auto-retry picks a different result
-        await prisma.download.update({
-          where: { id: downloadId },
-          data: { status: "FAILED", error: msg },
-        });
-        await prisma.request.update({
-          where: { id: requestId },
-          data: { status: "APPROVED" },
-        });
-        logger.log(`[PostCopy] Request #${requestId} reset to APPROVED for retry`);
-        if (download.indexer) recordIndexerFailure(download.indexer);
-
-        // Delete the wrong files from disk and download client
-        await cleanupWrongDownload(download, sourcePath);
+        await rejectWrongPlatform(downloadId, requestId, msg, download, sourcePath);
         return false;
       }
     }
 
     // For archive-only downloads, validate the source folder/file name against the platform
-    // This catches cases like "Advance Wars 1+2 Re-Boot Camp [Switch]" being downloaded for GBA
     const allArchives = romFiles.every((f) => [".zip", ".7z", ".rar"].includes(path.extname(f).toLowerCase()));
     if (allArchives && romFiles.length > 0) {
-      // Check the source folder name for platform mismatch
       const sourceName = path.basename(sourcePath);
       if (hasPlatformMismatch(sourceName, platformName)) {
         const msg = `Wrong platform: archive "${sourceName}" appears to be for a different platform than "${platformName}"`;
-        logger.error(`[PostCopy] ${msg}`);
-        await prisma.download.update({ where: { id: downloadId }, data: { status: "FAILED", error: msg } });
-        await prisma.request.update({ where: { id: requestId }, data: { status: "APPROVED" } });
-        logger.log(`[PostCopy] Request #${requestId} reset to APPROVED for retry`);
-        if (download.indexer) recordIndexerFailure(download.indexer);
-        await cleanupWrongDownload(download, sourcePath);
+        await rejectWrongPlatform(downloadId, requestId, msg, download, sourcePath);
         return false;
       }
     }
@@ -221,6 +194,20 @@ export function copyAndScan(requestId: number, downloadId: number): void {
       }
     })
     .catch((e) => logger.error(`[PostCopy] Error for request #${requestId}:`, e));
+}
+
+/** Mark a download as failed due to wrong platform, reset request, record failure, and clean up. */
+async function rejectWrongPlatform(
+  downloadId: number, requestId: number, msg: string,
+  download: { downloadType: string; torrentHash: string | null; nzbId: string | null; torrentName: string | null; indexer: string | null },
+  sourcePath: string,
+): Promise<void> {
+  logger.error(`[PostCopy] ${msg}`);
+  await prisma.download.update({ where: { id: downloadId }, data: { status: "FAILED", error: msg } });
+  await prisma.request.update({ where: { id: requestId }, data: { status: "APPROVED" } });
+  logger.log(`[PostCopy] Request #${requestId} reset to APPROVED for retry`);
+  if (download.indexer) recordIndexerFailure(download.indexer);
+  await cleanupWrongDownload(download, sourcePath);
 }
 
 /**

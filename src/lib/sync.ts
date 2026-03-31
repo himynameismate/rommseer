@@ -36,7 +36,6 @@ export function startBackgroundSync(): void {
         const downloads = await prisma.download.findMany({
           where: { status: "DOWNLOADING" },
           include: { request: { select: { status: true } } },
-          // stalledAt is a top-level field, included automatically
         });
         await syncAndRetryDownloads(downloads, { useRequestInclude: true });
       }
@@ -78,7 +77,7 @@ export function startBackgroundSync(): void {
 }
 
 /** Check if a torrent is currently showing stall symptoms (used to start/reset the stalledAt timer) */
-function isTorrentShowingStall(t: { state: string; num_seeds: number; num_leechs: number; added_on: number; dlspeed: number }): boolean {
+function isTorrentShowingStall(t: { state: string; added_on: number; dlspeed: number }): boolean {
   const speed = t.dlspeed;
 
   // Not stalled if it has any download speed
@@ -130,6 +129,7 @@ export async function syncAndRetryDownloads(
 ): Promise<void> {
   if (!downloads.length) return;
 
+  const settings = await prisma.settings.findUnique({ where: { id: 1 } });
   const downloadUpdates: StatusUpdate[] = [];
   const completedPairs: { requestId: number; downloadId: number }[] = [];
 
@@ -174,7 +174,6 @@ export async function syncAndRetryDownloads(
   const stalledHashes: string[] = []; // Track stalled torrents for deletion
   if (qbit) {
     try {
-      const settings = await prisma.settings.findUnique({ where: { id: 1 } });
       const category = settings?.qbitCategory || "rommseer";
       const stallDetectEnabled = settings?.stallDetectEnabled ?? true;
       const stallDetectMs = (settings?.stallDetectMinutes ?? 30) * 60 * 1000;
@@ -256,7 +255,6 @@ export async function syncAndRetryDownloads(
     } catch (e) { logger.error("qBit sync:", e); }
   }
 
-  // Batch DB updates using a transaction
   if (downloadUpdates.length > 0) {
     await prisma.$transaction(
       downloadUpdates.map((u) => prisma.download.update({ where: { id: u.id }, data: u.data }))
@@ -271,13 +269,10 @@ export async function syncAndRetryDownloads(
     } catch (e) { logger.error("[Sync] Failed to remove stalled torrents:", e); }
   }
 
-  // Trigger copy+scan for completed downloads (non-blocking)
   for (const { requestId, downloadId } of completedPairs) {
     copyAndScan(requestId, downloadId);
   }
 
-  // Auto-retry failed downloads
-  const settings = await prisma.settings.findUnique({ where: { id: 1 } });
   if (!settings?.prowlarrAutoGrab) return;
 
   const failedIds = new Set<number>();
@@ -292,8 +287,16 @@ export async function syncAndRetryDownloads(
     }
   }
 
-  for (const rid of Array.from(failedIds)) {
-    const count = await prisma.download.count({ where: { requestId: rid } });
+  const failedArr = Array.from(failedIds);
+  const retryCounts = await prisma.download.groupBy({
+    by: ["requestId"],
+    where: { requestId: { in: failedArr } },
+    _count: true,
+  });
+  const countMap = new Map(retryCounts.map((c) => [c.requestId, c._count]));
+
+  for (const rid of failedArr) {
+    const count = countMap.get(rid) || 0;
     if (count >= 3) {
       logger.log(`[AutoRetry] #${rid}: max retries (${count}), resetting to APPROVED`);
       await prisma.request.update({ where: { id: rid }, data: { status: "APPROVED" } });

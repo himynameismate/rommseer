@@ -51,6 +51,37 @@ interface SettingsData {
   rommLibraryPath: string;
 }
 
+function ToggleSwitch({ checked, onChange, label, description }: {
+  checked: boolean;
+  onChange: (value: boolean) => void;
+  label: string;
+  description?: string;
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={() => onChange(!checked)}
+        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+          checked ? "bg-primary" : "bg-muted-foreground/30"
+        }`}
+      >
+        <span
+          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition-transform ${
+            checked ? "translate-x-5" : "translate-x-0"
+          }`}
+        />
+      </button>
+      <div>
+        <label className="text-sm font-medium">{label}</label>
+        {description && <p className="text-xs text-muted-foreground">{description}</p>}
+      </div>
+    </div>
+  );
+}
+
 type TabKey = "general" | "romm" | "igdb" | "prowlarr" | "qbit" | "sabnzbd";
 
 const tabs: { key: TabKey; label: string; icon: React.ReactNode; description: string }[] = [
@@ -302,35 +333,11 @@ export default function SettingsPage() {
                   </div>
 
                   <div className="space-y-4">
-                    <div className="flex items-center gap-3">
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={settings.autoApprove}
-                        onClick={() =>
-                          setSettings((s) => ({
-                            ...s,
-                            autoApprove: !s.autoApprove,
-                          }))
-                        }
-                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                          settings.autoApprove
-                            ? "bg-primary"
-                            : "bg-muted-foreground/30"
-                        }`}
-                      >
-                        <span
-                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition-transform ${
-                            settings.autoApprove
-                              ? "translate-x-5"
-                              : "translate-x-0"
-                          }`}
-                        />
-                      </button>
-                      <label className="text-sm font-medium">
-                        Auto-Approve Requests
-                      </label>
-                    </div>
+                    <ToggleSwitch
+                      checked={settings.autoApprove}
+                      onChange={(v) => setSettings((s) => ({ ...s, autoApprove: v }))}
+                      label="Auto-Approve Requests"
+                    />
                     <p className="text-xs text-muted-foreground">
                       When enabled, new requests are automatically approved without
                       admin review. If Prowlarr auto-grab is also enabled, the full
@@ -532,35 +539,11 @@ export default function SettingsPage() {
                       Auto-Grab
                     </h3>
                     <div className="space-y-4">
-                      <div className="flex items-center gap-3">
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={settings.prowlarrAutoGrab}
-                          onClick={() =>
-                            setSettings((s) => ({
-                              ...s,
-                              prowlarrAutoGrab: !s.prowlarrAutoGrab,
-                            }))
-                          }
-                          className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                            settings.prowlarrAutoGrab
-                              ? "bg-primary"
-                              : "bg-muted-foreground/30"
-                          }`}
-                        >
-                          <span
-                            className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition-transform ${
-                              settings.prowlarrAutoGrab
-                                ? "translate-x-5"
-                                : "translate-x-0"
-                            }`}
-                          />
-                        </button>
-                        <label className="text-sm font-medium">
-                          Auto-Grab on Approve
-                        </label>
-                      </div>
+                      <ToggleSwitch
+                        checked={settings.prowlarrAutoGrab}
+                        onChange={(v) => setSettings((s) => ({ ...s, prowlarrAutoGrab: v }))}
+                        label="Auto-Grab on Approve"
+                      />
                       <p className="text-xs text-muted-foreground">
                         When enabled, approving a request will automatically search
                         Prowlarr and send the best result to qBittorrent (torrents)
@@ -654,34 +637,12 @@ export default function SettingsPage() {
                               chosen over others.
                             </p>
                           </div>
-                          <div className="flex items-center gap-3 sm:col-span-2 pt-2">
-                            <button
-                              type="button"
-                              role="switch"
-                              aria-checked={settings.prowlarrSkipFailingIndexers}
-                              onClick={() =>
-                                setSettings((s) => ({
-                                  ...s,
-                                  prowlarrSkipFailingIndexers: !s.prowlarrSkipFailingIndexers,
-                                }))
-                              }
-                              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                                settings.prowlarrSkipFailingIndexers
-                                  ? "bg-primary"
-                                  : "bg-muted-foreground/30"
-                              }`}
-                            >
-                              <span
-                                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition-transform ${
-                                  settings.prowlarrSkipFailingIndexers
-                                    ? "translate-x-5"
-                                    : "translate-x-0"
-                                }`}
-                              />
-                            </button>
-                            <label className="text-sm font-medium">
-                              Skip Failing Indexers
-                            </label>
+                          <div className="sm:col-span-2 pt-2">
+                            <ToggleSwitch
+                              checked={settings.prowlarrSkipFailingIndexers}
+                              onChange={(v) => setSettings((s) => ({ ...s, prowlarrSkipFailingIndexers: v }))}
+                              label="Skip Failing Indexers"
+                            />
                           </div>
                           <p className="text-xs text-muted-foreground sm:col-span-2">
                             Automatically skip indexers after 3 consecutive download
@@ -780,48 +741,20 @@ export default function SettingsPage() {
                     </div>
                   </div>
 
-                  {/* Stall Detection */}
                   <div className="border rounded-lg p-4 space-y-4">
-                    <div className="flex items-center gap-3">
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={settings.stallDetectEnabled}
-                        onClick={() =>
-                          setSettings((s) => ({
-                            ...s,
-                            stallDetectEnabled: !s.stallDetectEnabled,
-                          }))
-                        }
-                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                          settings.stallDetectEnabled
-                            ? "bg-primary"
-                            : "bg-muted-foreground/30"
-                        }`}
-                      >
-                        <span
-                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition-transform ${
-                            settings.stallDetectEnabled
-                              ? "translate-x-5"
-                              : "translate-x-0"
-                          }`}
-                        />
-                      </button>
-                      <div>
-                        <label className="text-sm font-medium">Stall Detection</label>
-                        <p className="text-xs text-muted-foreground">
-                          Automatically remove and retry downloads that stall with no progress.
-                        </p>
-                      </div>
-                    </div>
+                    <ToggleSwitch
+                      checked={settings.stallDetectEnabled}
+                      onChange={(v) => setSettings((s) => ({ ...s, stallDetectEnabled: v }))}
+                      label="Stall Detection"
+                      description="Automatically remove and retry downloads that stall with no progress."
+                    />
                     {settings.stallDetectEnabled && (
                       <div className="space-y-2">
                         <label className="text-sm font-medium">Stall Timeout (minutes)</label>
-                        <input
+                        <Input
                           type="number"
                           min={5}
                           max={1440}
-                          className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                           value={settings.stallDetectMinutes}
                           onChange={(e) =>
                             setSettings((s) => ({
