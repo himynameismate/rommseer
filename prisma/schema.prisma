@@ -86,6 +86,8 @@ model Settings {
   prowlarrMaxSizeMb     Int     @default(0)
   prowlarrPreferredIndexers String @default("")
   prowlarrSkipFailingIndexers Boolean @default(true)
+  stallDetectEnabled    Boolean @default(true)
+  stallDetectMinutes    Int     @default(30)
   sabnzbdUrl            String  @default("")
   sabnzbdApiKey         String  @default("")
   sabnzbdCategory       String  @default("rommseer")
@@ -104,6 +106,7 @@ model Download {
   magnetUrl    String?
   nzbId        String?  // SABnzbd NZO ID for usenet downloads
   indexer      String?  // Prowlarr indexer name (for failure tracking)
+  stalledAt    DateTime? // When stall was first detected (for stallDetectMinutes timer)
   status       String   @default("PENDING") // PENDING | DOWNLOADING | COMPLETED | FAILED
   progress     Float    @default(0)
   error        String?

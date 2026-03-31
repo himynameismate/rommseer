@@ -35,6 +35,7 @@ export function startBackgroundSync(): void {
         const downloads = await prisma.download.findMany({
           where: { status: "DOWNLOADING" },
           include: { request: { select: { status: true } } },
+          // stalledAt is a top-level field, included automatically
         });
         await syncAndRetryDownloads(downloads, { useRequestInclude: true });
       }
@@ -75,20 +76,14 @@ export function startBackgroundSync(): void {
   }, AUTOGRAB_SYNC_MS);
 }
 
-/** Check if a torrent is stalled (no seeds, no peers, no progress) */
-function isTorrentStalled(t: { state: string; num_seeds: number; num_leechs: number; progress: number; added_on: number; dlspeed: number }): boolean {
-  const seeds = t.num_seeds;
-  const peers = t.num_leechs;
+/** Check if a torrent is currently showing stall symptoms (used to start/reset the stalledAt timer) */
+function isTorrentShowingStall(t: { state: string; num_seeds: number; num_leechs: number; added_on: number; dlspeed: number }): boolean {
   const speed = t.dlspeed;
 
-  // Not stalled if it has any seeds, peers, or download speed
-  if (seeds > 0 || peers > 0 || speed > 0) return false;
+  // Not stalled if it has any download speed
+  if (speed > 0) return false;
 
-  // Not stalled if already has significant progress (might just be paused temporarily)
-  if (t.progress > 0.5) return false;
-
-  // Only mark as stalled if the torrent has been around for at least 5 minutes
-  // (give new torrents time to find peers)
+  // Give new torrents 5 minutes to find peers before considering them stalled
   const ageSeconds = Math.floor(Date.now() / 1000) - t.added_on;
   if (ageSeconds < 300) return false;
 
@@ -96,8 +91,8 @@ function isTorrentStalled(t: { state: string; num_seeds: number; num_leechs: num
   const stalledStates = ["stalledDL", "metaDL", "forcedMetaDL", "queuedDL"];
   if (stalledStates.includes(t.state)) return true;
 
-  // Also catch "downloading" with 0 speed and 0 seeds for 5+ minutes
-  if (t.state === "downloading" && speed === 0) return true;
+  // Also catch "downloading" with 0 speed for 5+ minutes
+  if (t.state === "downloading") return true;
 
   return false;
 }
@@ -110,6 +105,7 @@ interface DownloadRecord {
   torrentHash: string | null;
   torrentName: string | null;
   indexer: string | null;
+  stalledAt: Date | null;
   status: string;
   progress: number;
   createdAt?: Date | string | null;
@@ -118,7 +114,7 @@ interface DownloadRecord {
 
 interface StatusUpdate {
   id: number;
-  data: { status?: string; progress?: number; error?: string; torrentHash?: string };
+  data: { status?: string; progress?: number; error?: string; torrentHash?: string; stalledAt?: Date | null };
 }
 
 interface RequestUpdate {
@@ -185,6 +181,8 @@ export async function syncAndRetryDownloads(
     try {
       const settings = await prisma.settings.findUnique({ where: { id: 1 } });
       const category = settings?.qbitCategory || "rommseer";
+      const stallDetectEnabled = settings?.stallDetectEnabled ?? true;
+      const stallDetectMs = (settings?.stallDetectMinutes ?? 30) * 60 * 1000;
       const torrents = await qbit.getTorrents(undefined, category);
       const tMap = new Map(torrents.map((t) => [t.hash, t]));
       // Also build a name map for downloads without a stored hash
@@ -220,21 +218,45 @@ export async function syncAndRetryDownloads(
           dl.status = "FAILED";
           stalledHashes.push(t.hash);
         } else if (t.progress >= 1) {
-          downloadUpdates.push({ id: dl.id, data: { status: "COMPLETED", progress: 100 } });
+          downloadUpdates.push({ id: dl.id, data: { status: "COMPLETED", progress: 100, stalledAt: null } });
           dl.status = "COMPLETED";
           requestUpdates.push({ id: dl.requestId, data: { status: "AVAILABLE" } });
           completedPairs.push({ requestId: dl.requestId, downloadId: dl.id });
           console.log(`[Sync] Request #${dl.requestId}: torrent completed, marked AVAILABLE`);
-        } else if (isTorrentStalled(t)) {
-          // Torrent has 0 seeds/peers and no progress — it will never complete
-          console.log(`[Sync] Request #${dl.requestId}: torrent "${t.name}" is stalled (seeds: ${t.num_seeds}, peers: ${t.num_leechs}, state: ${t.state}, progress: ${progress}%)`);
-          downloadUpdates.push({ id: dl.id, data: { status: "FAILED", progress, error: "Stalled: no seeds or peers available" } });
-          dl.status = "FAILED";
-          stalledHashes.push(t.hash);
-          // Record indexer failure so consistently-stalling indexers get blocked
-          if (dl.indexer) recordIndexerFailure(dl.indexer);
-        } else if (progress !== Math.round(dl.progress)) {
-          downloadUpdates.push({ id: dl.id, data: { progress } });
+        } else if (stallDetectEnabled && isTorrentShowingStall(t)) {
+          const now = new Date();
+          if (!dl.stalledAt) {
+            // First time we see this stall — start the timer
+            console.log(`[Sync] Request #${dl.requestId}: torrent "${t.name}" stall detected (state: ${t.state}, speed: 0, progress: ${progress}%) — waiting ${settings?.stallDetectMinutes ?? 30}min before retry`);
+            downloadUpdates.push({ id: dl.id, data: { progress, stalledAt: now } });
+            dl.stalledAt = now;
+          } else {
+            const stalledMs = now.getTime() - new Date(dl.stalledAt).getTime();
+            if (stalledMs >= stallDetectMs) {
+              // Stall timer expired — mark failed and remove
+              console.log(`[Sync] Request #${dl.requestId}: torrent "${t.name}" stalled for ${Math.round(stalledMs / 60000)}min, marking FAILED`);
+              downloadUpdates.push({ id: dl.id, data: { status: "FAILED", progress, error: `Stalled for ${Math.round(stalledMs / 60000)} minutes with no progress` } });
+              dl.status = "FAILED";
+              stalledHashes.push(t.hash);
+              if (dl.indexer) recordIndexerFailure(dl.indexer);
+            } else {
+              // Still within grace period — just update progress
+              const remainingMin = Math.round((stallDetectMs - stalledMs) / 60000);
+              if (progress !== Math.round(dl.progress)) {
+                downloadUpdates.push({ id: dl.id, data: { progress } });
+              }
+              console.log(`[Sync] Request #${dl.requestId}: torrent "${t.name}" still stalled, ${remainingMin}min until retry`);
+            }
+          }
+        } else {
+          // Torrent is making progress — clear any stall timer
+          if (dl.stalledAt) {
+            downloadUpdates.push({ id: dl.id, data: { stalledAt: null } });
+            dl.stalledAt = null;
+          }
+          if (progress !== Math.round(dl.progress)) {
+            downloadUpdates.push({ id: dl.id, data: { progress } });
+          }
         }
       }
     } catch (e) { console.error("qBit sync:", e); }

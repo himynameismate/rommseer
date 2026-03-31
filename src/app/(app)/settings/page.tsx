@@ -42,6 +42,8 @@ interface SettingsData {
   prowlarrMaxSizeMb: number;
   prowlarrPreferredIndexers: string;
   prowlarrSkipFailingIndexers: boolean;
+  stallDetectEnabled: boolean;
+  stallDetectMinutes: number;
   sabnzbdUrl: string;
   sabnzbdApiKey: string;
   sabnzbdCategory: string;
@@ -82,6 +84,8 @@ export default function SettingsPage() {
     prowlarrMaxSizeMb: 0,
     prowlarrPreferredIndexers: "",
     prowlarrSkipFailingIndexers: true,
+    stallDetectEnabled: true,
+    stallDetectMinutes: 30,
     sabnzbdUrl: "",
     sabnzbdApiKey: "",
     sabnzbdCategory: "rommseer",
@@ -127,6 +131,8 @@ export default function SettingsPage() {
           prowlarrMaxSizeMb: data.prowlarrMaxSizeMb ?? 0,
           prowlarrPreferredIndexers: data.prowlarrPreferredIndexers ?? "",
           prowlarrSkipFailingIndexers: data.prowlarrSkipFailingIndexers ?? true,
+          stallDetectEnabled: data.stallDetectEnabled ?? true,
+          stallDetectMinutes: data.stallDetectMinutes ?? 30,
           sabnzbdUrl: data.sabnzbdUrl ?? "",
           sabnzbdApiKey: data.sabnzbdApiKey ?? "",
           sabnzbdCategory: data.sabnzbdCategory ?? "rommseer",
@@ -169,6 +175,8 @@ export default function SettingsPage() {
           prowlarrMaxSizeMb: data.prowlarrMaxSizeMb,
           prowlarrPreferredIndexers: data.prowlarrPreferredIndexers,
           prowlarrSkipFailingIndexers: data.prowlarrSkipFailingIndexers,
+          stallDetectEnabled: data.stallDetectEnabled ?? true,
+          stallDetectMinutes: data.stallDetectMinutes ?? 30,
           sabnzbdUrl: data.sabnzbdUrl,
           sabnzbdApiKey: data.sabnzbdApiKey,
           sabnzbdCategory: data.sabnzbdCategory,
@@ -771,6 +779,64 @@ export default function SettingsPage() {
                       </p>
                     </div>
                   </div>
+
+                  {/* Stall Detection */}
+                  <div className="border rounded-lg p-4 space-y-4">
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={settings.stallDetectEnabled}
+                        onClick={() =>
+                          setSettings((s) => ({
+                            ...s,
+                            stallDetectEnabled: !s.stallDetectEnabled,
+                          }))
+                        }
+                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                          settings.stallDetectEnabled
+                            ? "bg-primary"
+                            : "bg-muted-foreground/30"
+                        }`}
+                      >
+                        <span
+                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition-transform ${
+                            settings.stallDetectEnabled
+                              ? "translate-x-5"
+                              : "translate-x-0"
+                          }`}
+                        />
+                      </button>
+                      <div>
+                        <label className="text-sm font-medium">Stall Detection</label>
+                        <p className="text-xs text-muted-foreground">
+                          Automatically remove and retry downloads that stall with no progress.
+                        </p>
+                      </div>
+                    </div>
+                    {settings.stallDetectEnabled && (
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">Stall Timeout (minutes)</label>
+                        <input
+                          type="number"
+                          min={5}
+                          max={1440}
+                          className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                          value={settings.stallDetectMinutes}
+                          onChange={(e) =>
+                            setSettings((s) => ({
+                              ...s,
+                              stallDetectMinutes: Number(e.target.value) || 30,
+                            }))
+                          }
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          If a torrent has no download speed for this many minutes, it will be removed and a new source will be tried.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
                   <div className="flex items-center gap-3">
                     <Button
                       variant="outline"

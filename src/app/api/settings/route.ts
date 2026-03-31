@@ -35,6 +35,8 @@ export async function GET() {
       prowlarrMaxSizeMb: 0,
       prowlarrPreferredIndexers: "",
       prowlarrSkipFailingIndexers: true,
+      stallDetectEnabled: true,
+      stallDetectMinutes: 30,
       sabnzbdUrl: "",
       sabnzbdApiKey: "",
       sabnzbdCategory: "rommseer",
@@ -90,6 +92,8 @@ export async function PUT(req: NextRequest) {
     prowlarrMaxSizeMb,
     prowlarrPreferredIndexers,
     prowlarrSkipFailingIndexers,
+    stallDetectEnabled,
+    stallDetectMinutes,
     sabnzbdUrl,
     sabnzbdApiKey,
     sabnzbdCategory,
@@ -159,6 +163,8 @@ export async function PUT(req: NextRequest) {
     data.prowlarrPreferredIndexers = prowlarrPreferredIndexers;
   if (prowlarrSkipFailingIndexers !== undefined)
     data.prowlarrSkipFailingIndexers = prowlarrSkipFailingIndexers;
+  if (stallDetectEnabled !== undefined) data.stallDetectEnabled = stallDetectEnabled;
+  if (stallDetectMinutes !== undefined) data.stallDetectMinutes = Number(stallDetectMinutes);
 
   // SABnzbd
   if (sabnzbdUrl !== undefined) data.sabnzbdUrl = sabnzbdUrl;
@@ -196,6 +202,8 @@ export async function PUT(req: NextRequest) {
       prowlarrMaxSizeMb: prowlarrMaxSizeMb ?? 0,
       prowlarrPreferredIndexers: prowlarrPreferredIndexers ?? "",
       prowlarrSkipFailingIndexers: prowlarrSkipFailingIndexers ?? true,
+      stallDetectEnabled: stallDetectEnabled ?? true,
+      stallDetectMinutes: stallDetectMinutes ?? 30,
       sabnzbdUrl: sabnzbdUrl ?? "",
       sabnzbdApiKey: sabnzbdApiKey ?? "",
       sabnzbdCategory: sabnzbdCategory ?? "rommseer",
