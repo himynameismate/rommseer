@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/utils";
 
 export interface QBitTorrent {
   hash: string;
@@ -145,7 +146,7 @@ export class QBittorrentClient {
       await this.login();
       return true;
     } catch (error) {
-      console.error("qBittorrent connection test failed:", error);
+      logger.error("qBittorrent connection test failed:", error);
       return false;
     }
   }

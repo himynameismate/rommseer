@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/utils";
 
 /** Strip sensitive query parameters (apikey, api_key) from URLs before logging */
 function sanitizeUrl(url: string): string {
@@ -417,9 +418,9 @@ export class ProwlarrClient {
           const key = r.guid || `${r.title}-${r.indexer}-${r.size}`;
           if (!seen.has(key)) { seen.add(key); all.push(r); added++; }
         }
-        console.log(`[Prowlarr] "${q}": ${cat.length} cat + fallback uncategorized, ${added} new (${all.length} total)`);
+        logger.log(`[Prowlarr] "${q}": ${cat.length} cat + fallback uncategorized, ${added} new (${all.length} total)`);
       } else {
-        console.log(`[Prowlarr] "${q}": ${cat.length} cat results, ${added} new (${all.length} total)`);
+        logger.log(`[Prowlarr] "${q}": ${cat.length} cat results, ${added} new (${all.length} total)`);
       }
     }
 
@@ -448,7 +449,7 @@ export class ProwlarrClient {
       if (blocked.extension.length) parts.push(`${blocked.extension.length} bad extension`);
       if (blocked.wrongExt.length) parts.push(`${blocked.wrongExt.length} wrong platform ext`);
       if (blocked.platform.length) parts.push(`${blocked.platform.length} wrong platform`);
-      console.log(`[Prowlarr] Blocked ${totalBlocked}: ${parts.join(", ")}`);
+      logger.log(`[Prowlarr] Blocked ${totalBlocked}: ${parts.join(", ")}`);
     }
 
     filtered.sort((a, b) => {
@@ -456,7 +457,7 @@ export class ProwlarrClient {
       return score(b) - score(a) || a.size - b.size;
     });
 
-    console.log(`[Prowlarr] ${all.length} total → ${filtered.length} after filter/sort`);
+    logger.log(`[Prowlarr] ${all.length} total → ${filtered.length} after filter/sort`);
     return filtered;
   }
 
@@ -492,7 +493,7 @@ export class ProwlarrClient {
     if (match) {
       const rewritten = `${this.baseUrl}${match[1]}`;
       if (rewritten !== downloadUrl) {
-        console.log(`[Prowlarr] Rewriting download URL to use configured base URL`);
+        logger.log(`[Prowlarr] Rewriting download URL to use configured base URL`);
       }
       return rewritten;
     }
@@ -512,7 +513,7 @@ export class ProwlarrClient {
     try {
       // Rewrite Prowlarr download URLs to use our configured base URL
       const url = this.rewriteProwlarrUrl(downloadUrl) || downloadUrl;
-      console.log(`[Prowlarr] Downloading: ${sanitizeUrl(url).substring(0, 120)}...`);
+      logger.log(`[Prowlarr] Downloading: ${sanitizeUrl(url).substring(0, 120)}...`);
 
       // Use redirect: "manual" to catch magnet: redirects
       // (Node.js fetch crashes on non-HTTP redirect targets)
@@ -526,12 +527,12 @@ export class ProwlarrClient {
       if (res.status >= 300 && res.status < 400) {
         const location = res.headers.get("location");
         if (location?.startsWith("magnet:")) {
-          console.log(`[Prowlarr] Download redirected to magnet link!`);
+          logger.log(`[Prowlarr] Download redirected to magnet link!`);
           return { type: "magnet", url: location };
         }
         if (location?.startsWith("http")) {
           // Follow HTTP redirects manually
-          console.log(`[Prowlarr] Following redirect to: ${location.substring(0, 100)}...`);
+          logger.log(`[Prowlarr] Following redirect to: ${location.substring(0, 100)}...`);
           const res2 = await fetch(location, {
             headers: { "X-Api-Key": this.apiKey },
             redirect: "manual",
@@ -541,37 +542,37 @@ export class ProwlarrClient {
           if (res2.status >= 300 && res2.status < 400) {
             const loc2 = res2.headers.get("location");
             if (loc2?.startsWith("magnet:")) {
-              console.log(`[Prowlarr] Second redirect to magnet link!`);
+              logger.log(`[Prowlarr] Second redirect to magnet link!`);
               return { type: "magnet", url: loc2 };
             }
-            console.error(`[Prowlarr] Too many redirects: ${loc2?.substring(0, 80)}`);
+            logger.error(`[Prowlarr] Too many redirects: ${loc2?.substring(0, 80)}`);
             return null;
           }
           if (res2.ok) {
             const buf = Buffer.from(await res2.arrayBuffer());
             if (buf.length > 100) return { type: "file", data: buf };
-            console.error(`[Prowlarr] Downloaded file too small (${buf.length} bytes)`);
+            logger.error(`[Prowlarr] Downloaded file too small (${buf.length} bytes)`);
           }
           return null;
         }
-        console.error(`[Prowlarr] Unsupported redirect: ${location?.substring(0, 100)}`);
+        logger.error(`[Prowlarr] Unsupported redirect: ${location?.substring(0, 100)}`);
         return null;
       }
 
       if (res.ok) {
         const buf = Buffer.from(await res.arrayBuffer());
         if (buf.length > 100) return { type: "file", data: buf };
-        console.error(`[Prowlarr] Downloaded file too small (${buf.length} bytes)`);
+        logger.error(`[Prowlarr] Downloaded file too small (${buf.length} bytes)`);
         return null;
       }
 
       const errText = await res.text().catch(() => "");
-      console.error(`[Prowlarr] Download returned ${res.status}: ${errText.substring(0, 200)}`);
+      logger.error(`[Prowlarr] Download returned ${res.status}: ${errText.substring(0, 200)}`);
       return null;
     } catch (e: unknown) {
       const err = e instanceof Error ? e : null;
       const cause = err && "cause" in err ? (err.cause as Error)?.message || String(err.cause) : "unknown";
-      console.error(`[Prowlarr] Download error: ${err?.message || e} (cause: ${cause})`);
+      logger.error(`[Prowlarr] Download error: ${err?.message || e} (cause: ${cause})`);
       return null;
     } finally {
       clearTimeout(timeout);
@@ -585,7 +586,7 @@ export class ProwlarrClient {
    */
   async grabRelease(release: ProwlarrRelease): Promise<boolean> {
     try {
-      console.log(`[Prowlarr] Attempting Prowlarr-native grab for "${release.title}" via indexer ${release.indexer}`);
+      logger.log(`[Prowlarr] Attempting Prowlarr-native grab for "${release.title}" via indexer ${release.indexer}`);
       const res = await fetch(`${this.baseUrl}/api/v1/search`, {
         method: "POST",
         headers: { "X-Api-Key": this.apiKey, "Content-Type": "application/json" },
@@ -595,14 +596,14 @@ export class ProwlarrClient {
         }),
       });
       if (res.ok) {
-        console.log(`[Prowlarr] Prowlarr-native grab succeeded`);
+        logger.log(`[Prowlarr] Prowlarr-native grab succeeded`);
         return true;
       }
       const errText = await res.text().catch(() => "");
-      console.log(`[Prowlarr] Prowlarr-native grab returned ${res.status}: ${errText.substring(0, 200)}`);
+      logger.log(`[Prowlarr] Prowlarr-native grab returned ${res.status}: ${errText.substring(0, 200)}`);
       return false;
     } catch (e) {
-      console.log(`[Prowlarr] Prowlarr-native grab failed: ${e instanceof Error ? e.message : e}`);
+      logger.log(`[Prowlarr] Prowlarr-native grab failed: ${e instanceof Error ? e.message : e}`);
       return false;
     }
   }

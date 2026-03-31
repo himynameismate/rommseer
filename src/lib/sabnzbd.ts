@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/utils";
 
 export interface SABnzbdSlot {
   nzo_id: string;
@@ -71,7 +72,7 @@ export class SABnzbdClient {
       });
       return !!result.version;
     } catch (error) {
-      console.error("SABnzbd connection test failed:", error);
+      logger.error("SABnzbd connection test failed:", error);
       return false;
     }
   }

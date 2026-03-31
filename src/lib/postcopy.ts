@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/utils";
 import { getCachedSABnzbdClient, getCachedQBittorrentClient, getCachedRomMClient, debouncedScan } from "@/lib/clients";
 import { recordIndexerFailure } from "@/lib/autograb";
 import { formatBytes } from "@/lib/utils";
@@ -20,7 +21,7 @@ export async function copyToRomMLibrary(
 ): Promise<boolean> {
   const settings = await prisma.settings.findUnique({ where: { id: 1 } });
   if (!settings?.rommLibraryPath) {
-    console.log(`[PostCopy] No RomM library path configured, skipping copy`);
+    logger.log(`[PostCopy] No RomM library path configured, skipping copy`);
     return false;
   }
 
@@ -34,27 +35,27 @@ export async function copyToRomMLibrary(
   });
 
   if (!download) {
-    console.error(`[PostCopy] Download #${downloadId} not found`);
+    logger.error(`[PostCopy] Download #${downloadId} not found`);
     return false;
   }
 
   // Get the source path from the download client
   const sourcePath = await getSourcePath(download);
   if (!sourcePath) {
-    console.log(`[PostCopy] Could not determine source path for download #${downloadId}`);
+    logger.log(`[PostCopy] Could not determine source path for download #${downloadId}`);
     return false;
   }
 
   // Determine platform slug for destination folder
   const platformSlug = await getPlatformSlug(download.request.game.platform);
   if (!platformSlug) {
-    console.error(`[PostCopy] Could not determine platform slug for "${download.request.game.platform.name}"`);
+    logger.error(`[PostCopy] Could not determine platform slug for "${download.request.game.platform.name}"`);
     return false;
   }
 
   // Sanitize platformSlug to only allow safe characters
   if (!/^[a-zA-Z0-9_-]+$/.test(platformSlug)) {
-    console.error(`[PostCopy] Invalid platform slug: "${platformSlug}"`);
+    logger.error(`[PostCopy] Invalid platform slug: "${platformSlug}"`);
     return false;
   }
 
@@ -63,23 +64,23 @@ export async function copyToRomMLibrary(
   // Validate destDir is within the expected library path
   const resolvedLibraryPath = path.resolve(settings.rommLibraryPath);
   if (!destDir.startsWith(resolvedLibraryPath + path.sep) && destDir !== resolvedLibraryPath) {
-    console.error(`[PostCopy] Path traversal detected: destDir "${destDir}" is outside library path "${resolvedLibraryPath}"`);
+    logger.error(`[PostCopy] Path traversal detected: destDir "${destDir}" is outside library path "${resolvedLibraryPath}"`);
     return false;
   }
 
-  console.log(`[PostCopy] Copying from "${sourcePath}" to "${destDir}" for request #${requestId}`);
+  logger.log(`[PostCopy] Copying from "${sourcePath}" to "${destDir}" for request #${requestId}`);
 
   try {
     // Ensure destination directory exists
     if (!fs.existsSync(destDir)) {
       fs.mkdirSync(destDir, { recursive: true });
-      console.log(`[PostCopy] Created directory: ${destDir}`);
+      logger.log(`[PostCopy] Created directory: ${destDir}`);
     }
 
     // Collect ROM files from source
     const romFiles = findRomFiles(sourcePath);
     if (romFiles.length === 0) {
-      console.log(`[PostCopy] No ROM files found in "${sourcePath}"`);
+      logger.log(`[PostCopy] No ROM files found in "${sourcePath}"`);
       return false;
     }
 
@@ -96,7 +97,7 @@ export async function copyToRomMLibrary(
         // ALL ROM files have wrong extensions — this is the wrong platform
         const foundExts = wrongFiles.map((f) => path.extname(f).toLowerCase()).join(", ");
         const msg = `Wrong platform: downloaded files have extensions [${foundExts}] but expected [${validExts.join(", ")}] for "${platformName}"`;
-        console.error(`[PostCopy] ${msg}`);
+        logger.error(`[PostCopy] ${msg}`);
 
         // Mark download as FAILED so auto-retry picks a different result
         await prisma.download.update({
@@ -107,7 +108,7 @@ export async function copyToRomMLibrary(
           where: { id: requestId },
           data: { status: "APPROVED" },
         });
-        console.log(`[PostCopy] Request #${requestId} reset to APPROVED for retry`);
+        logger.log(`[PostCopy] Request #${requestId} reset to APPROVED for retry`);
         if (download.indexer) recordIndexerFailure(download.indexer);
 
         // Delete the wrong files from disk and download client
@@ -124,10 +125,10 @@ export async function copyToRomMLibrary(
       const sourceName = path.basename(sourcePath);
       if (hasPlatformMismatch(sourceName, platformName)) {
         const msg = `Wrong platform: archive "${sourceName}" appears to be for a different platform than "${platformName}"`;
-        console.error(`[PostCopy] ${msg}`);
+        logger.error(`[PostCopy] ${msg}`);
         await prisma.download.update({ where: { id: downloadId }, data: { status: "FAILED", error: msg } });
         await prisma.request.update({ where: { id: requestId }, data: { status: "APPROVED" } });
-        console.log(`[PostCopy] Request #${requestId} reset to APPROVED for retry`);
+        logger.log(`[PostCopy] Request #${requestId} reset to APPROVED for retry`);
         if (download.indexer) recordIndexerFailure(download.indexer);
         await cleanupWrongDownload(download, sourcePath);
         return false;
@@ -141,7 +142,7 @@ export async function copyToRomMLibrary(
 
       // Validate destFile is within destDir to prevent path traversal via filename
       if (!destFile.startsWith(destDir + path.sep) && destFile !== destDir) {
-        console.error(`[PostCopy] Skipping file with suspicious name: "${filename}"`);
+        logger.error(`[PostCopy] Skipping file with suspicious name: "${filename}"`);
         continue;
       }
 
@@ -149,20 +150,20 @@ export async function copyToRomMLibrary(
         const srcStat = fs.statSync(srcFile);
         const destStat = fs.statSync(destFile);
         if (srcStat.size === destStat.size) {
-          console.log(`[PostCopy] "${filename}" already exists (same size), skipping`);
+          logger.log(`[PostCopy] "${filename}" already exists (same size), skipping`);
           continue;
         }
       }
 
-      console.log(`[PostCopy] Copying "${filename}" (${formatBytes(fs.statSync(srcFile).size)})`);
+      logger.log(`[PostCopy] Copying "${filename}" (${formatBytes(fs.statSync(srcFile).size)})`);
       fs.copyFileSync(srcFile, destFile);
       copied++;
     }
 
-    console.log(`[PostCopy] Done: ${copied} file(s) copied to ${destDir}`);
+    logger.log(`[PostCopy] Done: ${copied} file(s) copied to ${destDir}`);
     return copied > 0;
   } catch (e) {
-    console.error(`[PostCopy] Failed:`, e instanceof Error ? e.message : e);
+    logger.error(`[PostCopy] Failed:`, e instanceof Error ? e.message : e);
     return false;
   }
 }
@@ -177,14 +178,14 @@ export function copyAndScan(requestId: number, downloadId: number): void {
       // Check if the download was marked FAILED (wrong platform detection)
       const dl = await prisma.download.findUnique({ where: { id: downloadId }, select: { status: true } });
       if (dl?.status === "FAILED") {
-        console.log(`[PostCopy] Download #${downloadId} was marked FAILED (wrong platform), sync loop will retry`);
+        logger.log(`[PostCopy] Download #${downloadId} was marked FAILED (wrong platform), sync loop will retry`);
         return; // Don't trigger scan for failed downloads
       }
 
       if (copied) {
-        console.log(`[PostCopy] Files copied for request #${requestId}, triggering RomM scan`);
+        logger.log(`[PostCopy] Files copied for request #${requestId}, triggering RomM scan`);
       } else {
-        console.log(`[PostCopy] No files copied for request #${requestId}, triggering RomM scan anyway`);
+        logger.log(`[PostCopy] No files copied for request #${requestId}, triggering RomM scan anyway`);
       }
 
       const req = await prisma.request.findUnique({
@@ -204,17 +205,17 @@ export function copyAndScan(requestId: number, downloadId: number): void {
         );
 
         if (match) {
-          console.log(`[RomM] Scanning platform "${match.name}" (id=${match.id}) for request #${requestId}`);
+          logger.log(`[RomM] Scanning platform "${match.name}" (id=${match.id}) for request #${requestId}`);
           debouncedScan(romm, match.id);
         } else {
-          console.log(`[RomM] No matching platform for "${req.game.platform.name}", triggering full scan`);
+          logger.log(`[RomM] No matching platform for "${req.game.platform.name}", triggering full scan`);
           debouncedScan(romm);
         }
       } catch (e) {
-        console.error(`[RomM] Scan trigger failed for request #${requestId}:`, e);
+        logger.error(`[RomM] Scan trigger failed for request #${requestId}:`, e);
       }
     })
-    .catch((e) => console.error(`[PostCopy] Error for request #${requestId}:`, e));
+    .catch((e) => logger.error(`[PostCopy] Error for request #${requestId}:`, e));
 }
 
 /**
@@ -230,7 +231,7 @@ async function cleanupWrongDownload(
     if (download.torrentHash) {
       const qbit = await getCachedQBittorrentClient();
       if (qbit) {
-        console.log(`[PostCopy] Removing wrong-platform torrent from qBittorrent: ${download.torrentHash}`);
+        logger.log(`[PostCopy] Removing wrong-platform torrent from qBittorrent: ${download.torrentHash}`);
         await qbit.deleteTorrents([download.torrentHash], true);
       }
     }
@@ -240,20 +241,20 @@ async function cleanupWrongDownload(
       // Safety: only delete within the downloads directory
       const resolved = path.resolve(sourcePath);
       if (!resolved.startsWith(DOWNLOADS_PATH + path.sep) && resolved !== DOWNLOADS_PATH) {
-        console.log(`[PostCopy] Skipping cleanup: "${resolved}" is outside ${DOWNLOADS_PATH}`);
+        logger.log(`[PostCopy] Skipping cleanup: "${resolved}" is outside ${DOWNLOADS_PATH}`);
         return;
       }
       const stat = fs.statSync(sourcePath);
       if (stat.isDirectory()) {
         fs.rmSync(sourcePath, { recursive: true, force: true });
-        console.log(`[PostCopy] Deleted wrong-platform directory: ${sourcePath}`);
+        logger.log(`[PostCopy] Deleted wrong-platform directory: ${sourcePath}`);
       } else {
         fs.unlinkSync(sourcePath);
-        console.log(`[PostCopy] Deleted wrong-platform file: ${sourcePath}`);
+        logger.log(`[PostCopy] Deleted wrong-platform file: ${sourcePath}`);
       }
     }
   } catch (e) {
-    console.error(`[PostCopy] Failed to clean up wrong download:`, e);
+    logger.error(`[PostCopy] Failed to clean up wrong download:`, e);
   }
 }
 
@@ -288,20 +289,20 @@ async function getSourcePath(
 
       for (const candidate of candidates) {
         if (fs.existsSync(candidate)) {
-          console.log(`[PostCopy] Found SABnzbd download at: ${candidate}`);
+          logger.log(`[PostCopy] Found SABnzbd download at: ${candidate}`);
           return candidate;
         }
       }
 
-      console.log(`[PostCopy] SABnzbd download "${name}" not found. Tried: ${candidates.join(", ")}`);
+      logger.log(`[PostCopy] SABnzbd download "${name}" not found. Tried: ${candidates.join(", ")}`);
       // List /downloads for debugging
       try {
         const entries = fs.readdirSync(DOWNLOADS_PATH);
-        console.log(`[PostCopy] Contents of ${DOWNLOADS_PATH}: ${entries.join(", ")}`);
+        logger.log(`[PostCopy] Contents of ${DOWNLOADS_PATH}: ${entries.join(", ")}`);
       } catch { /* ignore */ }
       return null;
     } catch (e) {
-      console.error(`[PostCopy] SABnzbd history lookup failed:`, e);
+      logger.error(`[PostCopy] SABnzbd history lookup failed:`, e);
       return null;
     }
   }
@@ -327,19 +328,19 @@ async function getSourcePath(
 
       for (const candidate of candidates) {
         if (fs.existsSync(candidate)) {
-          console.log(`[PostCopy] Found qBittorrent download at: ${candidate}`);
+          logger.log(`[PostCopy] Found qBittorrent download at: ${candidate}`);
           return candidate;
         }
       }
 
-      console.log(`[PostCopy] qBittorrent download "${name}" not found. Tried: ${candidates.join(", ")}`);
+      logger.log(`[PostCopy] qBittorrent download "${name}" not found. Tried: ${candidates.join(", ")}`);
       try {
         const entries = fs.readdirSync(DOWNLOADS_PATH);
-        console.log(`[PostCopy] Contents of ${DOWNLOADS_PATH}: ${entries.join(", ")}`);
+        logger.log(`[PostCopy] Contents of ${DOWNLOADS_PATH}: ${entries.join(", ")}`);
       } catch { /* ignore */ }
       return null;
     } catch (e) {
-      console.error(`[PostCopy] qBittorrent lookup failed:`, e);
+      logger.error(`[PostCopy] qBittorrent lookup failed:`, e);
       return null;
     }
   }
@@ -364,12 +365,12 @@ async function getPlatformSlug(
       if (match) {
         // Use fs_slug (actual folder name on disk) if available, otherwise slug
         const slug = match.fs_slug || match.slug;
-        console.log(`[PostCopy] Matched RomM platform: "${match.name}" -> folder "${slug}"`);
+        logger.log(`[PostCopy] Matched RomM platform: "${match.name}" -> folder "${slug}"`);
         return slug;
       }
     }
   } catch (e) {
-    console.error(`[PostCopy] RomM platform lookup failed:`, e);
+    logger.error(`[PostCopy] RomM platform lookup failed:`, e);
   }
 
   // Fallback: use the platform slug from our database

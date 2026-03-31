@@ -1,6 +1,16 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 
+function ts() {
+  return new Date().toISOString().replace("T", " ").replace("Z", "");
+}
+
+export const logger = {
+  log: (...args: unknown[]) => console.log(`[${ts()}]`, ...args),
+  error: (...args: unknown[]) => console.error(`[${ts()}]`, ...args),
+  warn: (...args: unknown[]) => console.warn(`[${ts()}]`, ...args),
+};
+
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }

@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/utils";
 import { io } from "socket.io-client";
 
 interface RomMPlatform {
@@ -85,7 +86,7 @@ export class RomMClient {
         }
       });
     } catch (e) {
-      console.error("[RomM] Failed to get CSRF token:", e instanceof Error ? e.message : e);
+      logger.error("[RomM] Failed to get CSRF token:", e instanceof Error ? e.message : e);
     }
   }
 
@@ -152,7 +153,7 @@ export class RomMClient {
       await this.fetch<RomMPlatform[]>("/platforms");
       return true;
     } catch (error) {
-      console.error("RomM connection test failed:", error);
+      logger.error("RomM connection test failed:", error);
       return false;
     }
   }
@@ -186,7 +187,7 @@ export class RomMClient {
       const timeout = setTimeout(() => {
         socket.disconnect();
         // Scan was emitted, just resolve even if we didn't get confirmation
-        console.log(`[RomM] Scan emit timed out waiting for response, scan likely started`);
+        logger.log(`[RomM] Scan emit timed out waiting for response, scan likely started`);
         resolve();
       }, 10_000);
 
@@ -201,7 +202,7 @@ export class RomMClient {
       });
 
       socket.on("connect", () => {
-        console.log(`[RomM] Socket connected, emitting scan event (type=${scanType}, platforms=${platformIds.join(",")||"all"})`);
+        logger.log(`[RomM] Socket connected, emitting scan event (type=${scanType}, platforms=${platformIds.join(",")||"all"})`);
         socket.emit("scan", {
           platforms: platformIds,
           type: scanType,
@@ -214,7 +215,7 @@ export class RomMClient {
         setTimeout(() => {
           clearTimeout(timeout);
           socket.disconnect();
-          console.log(`[RomM] Scan triggered successfully`);
+          logger.log(`[RomM] Scan triggered successfully`);
           resolve();
         }, 2000);
       });
@@ -222,14 +223,14 @@ export class RomMClient {
       socket.on("scan:done", () => {
         clearTimeout(timeout);
         socket.disconnect();
-        console.log(`[RomM] Scan completed`);
+        logger.log(`[RomM] Scan completed`);
         resolve();
       });
 
       socket.on("connect_error", (err) => {
         clearTimeout(timeout);
         socket.disconnect();
-        console.error(`[RomM] Socket connection error:`, err.message);
+        logger.error(`[RomM] Socket connection error:`, err.message);
         reject(new Error(`RomM socket connection failed: ${err.message}`));
       });
     });
@@ -240,7 +241,7 @@ export class RomMClient {
     try {
       await this.triggerScan([platformId], "quick");
     } catch (e) {
-      console.error(`[RomM] Platform scan failed:`, e instanceof Error ? e.message : e);
+      logger.error(`[RomM] Platform scan failed:`, e instanceof Error ? e.message : e);
     }
   }
 
@@ -249,7 +250,7 @@ export class RomMClient {
     try {
       await this.triggerScan([], "quick");
     } catch (e) {
-      console.error(`[RomM] Full scan failed:`, e instanceof Error ? e.message : e);
+      logger.error(`[RomM] Full scan failed:`, e instanceof Error ? e.message : e);
     }
   }
 }

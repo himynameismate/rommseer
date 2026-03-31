@@ -4,6 +4,7 @@
  * failed, and stalled downloads without requiring the admin to visit the page.
  */
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/utils";
 import { getCachedSABnzbdClient, getCachedQBittorrentClient } from "@/lib/clients";
 import { autoGrabForRequest, recordIndexerFailure } from "@/lib/autograb";
 import { copyAndScan } from "@/lib/postcopy";
@@ -22,7 +23,7 @@ let autoGrabRunning = false;
 export function startBackgroundSync(): void {
   if (bgSyncStarted) return;
   bgSyncStarted = true;
-  console.log(`[Sync] Background sync started (downloads: ${DOWNLOAD_SYNC_MS / 1000}s, auto-grab: ${AUTOGRAB_SYNC_MS / 1000}s)`);
+  logger.log(`[Sync] Background sync started (downloads: ${DOWNLOAD_SYNC_MS / 1000}s, auto-grab: ${AUTOGRAB_SYNC_MS / 1000}s)`);
 
   // Fast loop: monitor active downloads for completion/stalls
   setInterval(async () => {
@@ -40,7 +41,7 @@ export function startBackgroundSync(): void {
         await syncAndRetryDownloads(downloads, { useRequestInclude: true });
       }
     } catch (e) {
-      console.error("[Sync] Background sync error:", e);
+      logger.error("[Sync] Background sync error:", e);
     } finally {
       bgSyncRunning = false;
     }
@@ -61,15 +62,15 @@ export function startBackgroundSync(): void {
       for (const req of approved) {
         autoGrabForRequest(req.id)
           .then((r) => {
-            if (r.success) console.log(`[Sync] Auto-grabbed #${req.id}: ${r.message}`);
+            if (r.success) logger.log(`[Sync] Auto-grabbed #${req.id}: ${r.message}`);
             else if (r.message !== "Auto-grab not enabled" && r.message !== "Already grabbing") {
-              console.log(`[Sync] Auto-grab #${req.id}: ${r.message}`);
+              logger.log(`[Sync] Auto-grab #${req.id}: ${r.message}`);
             }
           })
-          .catch((e) => console.error(`[Sync] Auto-grab #${req.id} error:`, e));
+          .catch((e) => logger.error(`[Sync] Auto-grab #${req.id} error:`, e));
       }
     } catch (e) {
-      console.error("[Sync] Auto-grab loop error:", e);
+      logger.error("[Sync] Auto-grab loop error:", e);
     } finally {
       autoGrabRunning = false;
     }
@@ -150,7 +151,7 @@ export async function syncAndRetryDownloads(
         const hs = hMap.get(dl.nzbId);
         const qs = qMap.get(dl.nzbId);
         if (hs) {
-          console.log(`[Sync] SABnzbd history for ${dl.nzbId}: status="${hs.status}", fail_message="${hs.fail_message || ""}"`);
+          logger.log(`[Sync] SABnzbd history for ${dl.nzbId}: status="${hs.status}", fail_message="${hs.fail_message || ""}"`);
         }
 
         const isFailed = hs && hs.status !== "Completed" && !qMap.has(dl.nzbId);
@@ -163,7 +164,7 @@ export async function syncAndRetryDownloads(
           dl.status = "COMPLETED";
           requestUpdates.push({ id: dl.requestId, data: { status: "AVAILABLE" } });
           completedPairs.push({ requestId: dl.requestId, downloadId: dl.id });
-          console.log(`[Sync] Request #${dl.requestId}: download completed, marked AVAILABLE`);
+          logger.log(`[Sync] Request #${dl.requestId}: download completed, marked AVAILABLE`);
         } else if (qs) {
           const progress = Math.round(parseFloat(qs.percentage));
           if (progress !== Math.round(dl.progress)) {
@@ -171,7 +172,7 @@ export async function syncAndRetryDownloads(
           }
         }
       }
-    } catch (e) { console.error("SABnzbd sync:", e); }
+    } catch (e) { logger.error("SABnzbd sync:", e); }
   }
 
   // Sync qBittorrent status (filter by rommseer category)
@@ -204,7 +205,7 @@ export async function syncAndRetryDownloads(
           // Torrent not found in qBittorrent — check if it's been missing long enough to mark failed
           const ageMs = Date.now() - new Date(dl.createdAt || 0).getTime();
           if (ageMs > 5 * 60 * 1000) {
-            console.log(`[Sync] Request #${dl.requestId}: torrent "${dl.torrentName || dl.torrentHash}" not found in qBittorrent after ${Math.round(ageMs / 60000)}min, marking FAILED`);
+            logger.log(`[Sync] Request #${dl.requestId}: torrent "${dl.torrentName || dl.torrentHash}" not found in qBittorrent after ${Math.round(ageMs / 60000)}min, marking FAILED`);
             downloadUpdates.push({ id: dl.id, data: { status: "FAILED", error: "Torrent not found in qBittorrent (never added or removed)" } });
             dl.status = "FAILED";
             if (dl.indexer) recordIndexerFailure(dl.indexer);
@@ -222,19 +223,19 @@ export async function syncAndRetryDownloads(
           dl.status = "COMPLETED";
           requestUpdates.push({ id: dl.requestId, data: { status: "AVAILABLE" } });
           completedPairs.push({ requestId: dl.requestId, downloadId: dl.id });
-          console.log(`[Sync] Request #${dl.requestId}: torrent completed, marked AVAILABLE`);
+          logger.log(`[Sync] Request #${dl.requestId}: torrent completed, marked AVAILABLE`);
         } else if (stallDetectEnabled && isTorrentShowingStall(t)) {
           const now = new Date();
           if (!dl.stalledAt) {
             // First time we see this stall — start the timer
-            console.log(`[Sync] Request #${dl.requestId}: torrent "${t.name}" stall detected (state: ${t.state}, speed: 0, progress: ${progress}%) — waiting ${settings?.stallDetectMinutes ?? 30}min before retry`);
+            logger.log(`[Sync] Request #${dl.requestId}: torrent "${t.name}" stall detected (state: ${t.state}, speed: 0, progress: ${progress}%) — waiting ${settings?.stallDetectMinutes ?? 30}min before retry`);
             downloadUpdates.push({ id: dl.id, data: { progress, stalledAt: now } });
             dl.stalledAt = now;
           } else {
             const stalledMs = now.getTime() - new Date(dl.stalledAt).getTime();
             if (stalledMs >= stallDetectMs) {
               // Stall timer expired — mark failed and remove
-              console.log(`[Sync] Request #${dl.requestId}: torrent "${t.name}" stalled for ${Math.round(stalledMs / 60000)}min, marking FAILED`);
+              logger.log(`[Sync] Request #${dl.requestId}: torrent "${t.name}" stalled for ${Math.round(stalledMs / 60000)}min, marking FAILED`);
               downloadUpdates.push({ id: dl.id, data: { status: "FAILED", progress, error: `Stalled for ${Math.round(stalledMs / 60000)} minutes with no progress` } });
               dl.status = "FAILED";
               stalledHashes.push(t.hash);
@@ -245,7 +246,7 @@ export async function syncAndRetryDownloads(
               if (progress !== Math.round(dl.progress)) {
                 downloadUpdates.push({ id: dl.id, data: { progress } });
               }
-              console.log(`[Sync] Request #${dl.requestId}: torrent "${t.name}" still stalled, ${remainingMin}min until retry`);
+              logger.log(`[Sync] Request #${dl.requestId}: torrent "${t.name}" still stalled, ${remainingMin}min until retry`);
             }
           }
         } else {
@@ -259,7 +260,7 @@ export async function syncAndRetryDownloads(
           }
         }
       }
-    } catch (e) { console.error("qBit sync:", e); }
+    } catch (e) { logger.error("qBit sync:", e); }
   }
 
   // Batch DB updates using a transaction
@@ -273,9 +274,9 @@ export async function syncAndRetryDownloads(
   // Remove stalled/failed torrents from qBittorrent (free up space)
   if (qbit && stalledHashes.length > 0) {
     try {
-      console.log(`[Sync] Removing ${stalledHashes.length} stalled/failed torrent(s) from qBittorrent`);
+      logger.log(`[Sync] Removing ${stalledHashes.length} stalled/failed torrent(s) from qBittorrent`);
       await qbit.deleteTorrents(stalledHashes, true);
-    } catch (e) { console.error("[Sync] Failed to remove stalled torrents:", e); }
+    } catch (e) { logger.error("[Sync] Failed to remove stalled torrents:", e); }
   }
 
   // Trigger copy+scan for completed downloads (non-blocking)
@@ -302,12 +303,12 @@ export async function syncAndRetryDownloads(
   for (const rid of Array.from(failedIds)) {
     const count = await prisma.download.count({ where: { requestId: rid } });
     if (count >= 3) {
-      console.log(`[AutoRetry] #${rid}: max retries (${count}), resetting to APPROVED`);
+      logger.log(`[AutoRetry] #${rid}: max retries (${count}), resetting to APPROVED`);
       await prisma.request.update({ where: { id: rid }, data: { status: "APPROVED" } });
       continue;
     }
-    console.log(`[AutoRetry] #${rid}: retrying (${count + 1}/3)`);
+    logger.log(`[AutoRetry] #${rid}: retrying (${count + 1}/3)`);
     await prisma.request.update({ where: { id: rid }, data: { status: "APPROVED" } });
-    autoGrabForRequest(rid).then((r) => console.log(`[AutoRetry] #${rid}:`, r.message)).catch((e) => console.error(`[AutoRetry] #${rid}:`, e));
+    autoGrabForRequest(rid).then((r) => logger.log(`[AutoRetry] #${rid}:`, r.message)).catch((e) => logger.error(`[AutoRetry] #${rid}:`, e));
   }
 }

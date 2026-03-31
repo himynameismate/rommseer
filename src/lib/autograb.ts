@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/utils";
 import { ProwlarrRelease } from "@/lib/prowlarr";
 import { getCachedProwlarrClient, getCachedQBittorrentClient, getCachedSABnzbdClient } from "@/lib/clients";
 
@@ -36,7 +37,7 @@ export function recordIndexerFailure(indexer: string): void {
   existing.lastFailure = Date.now();
   indexerFailures.set(indexer, existing);
   if (existing.count === INDEXER_FAIL_THRESHOLD) {
-    console.log(`[AutoGrab] Indexer "${indexer}" blocked after ${existing.count} failures (30 min cooldown)`);
+    logger.log(`[AutoGrab] Indexer "${indexer}" blocked after ${existing.count} failures (30 min cooldown)`);
   }
 }
 
@@ -49,7 +50,7 @@ function isIndexerBlocked(indexer: string): boolean {
   if (!record || record.count < INDEXER_FAIL_THRESHOLD) return false;
   // Reset after cooldown
   if (Date.now() - record.lastFailure > INDEXER_COOLDOWN_MS) {
-    console.log(`[AutoGrab] Indexer "${indexer}" cooldown expired, retrying`);
+    logger.log(`[AutoGrab] Indexer "${indexer}" cooldown expired, retrying`);
     indexerFailures.delete(indexer);
     return false;
   }
@@ -95,7 +96,7 @@ async function _autoGrabForRequest(requestId: number): Promise<AutoGrabResult> {
     const normTitle = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
     const failed = await prisma.download.findMany({ where: { requestId, status: "FAILED" }, select: { torrentName: true } });
     const failedTitles = new Set(failed.map((d) => normTitle(d.torrentName || "")).filter(Boolean));
-    if (failedTitles.size) console.log(`[AutoGrab] Excluding ${failedTitles.size} previously failed results`);
+    if (failedTitles.size) logger.log(`[AutoGrab] Excluding ${failedTitles.size} previously failed results`);
 
     const allResults = await prowlarr.searchForRom(
       request.game.name, request.game.platform.name,
@@ -119,7 +120,7 @@ async function _autoGrabForRequest(requestId: number): Promise<AutoGrabResult> {
     const blocked = skipFailing ? results.filter((r) => isIndexerBlocked(r.indexer)) : [];
     const viable = skipFailing ? results.filter((r) => !isIndexerBlocked(r.indexer)) : results;
     const blockedIndexerNames = Array.from(new Set(blocked.map((r) => r.indexer))).join(", ");
-    if (blocked.length) console.log(`[AutoGrab] Skipping ${blocked.length} results from blocked indexers: ${blockedIndexerNames}`);
+    if (blocked.length) logger.log(`[AutoGrab] Skipping ${blocked.length} results from blocked indexers: ${blockedIndexerNames}`);
     if (!viable.length && blocked.length) {
       return { success: false, message: `All ${results.length} results from blocked indexers (${blockedIndexerNames})` };
     }
@@ -130,7 +131,7 @@ async function _autoGrabForRequest(requestId: number): Promise<AutoGrabResult> {
     for (let i = 0; i < viable.length && tried < 5; i++) {
       const r = viable[i];
       tried++;
-      console.log(`[AutoGrab] Try ${tried}: "${r.title}" (${r.protocol}, ${r.indexer}) [magnet:${!!r.magnetUrl}, hash:${!!r.infoHash}, url:${!!r.downloadUrl}]`);
+      logger.log(`[AutoGrab] Try ${tried}: "${r.title}" (${r.protocol}, ${r.indexer}) [magnet:${!!r.magnetUrl}, hash:${!!r.infoHash}, url:${!!r.downloadUrl}]`);
       try {
         let result: AutoGrabResult;
         if (r.protocol === "usenet") {
@@ -144,7 +145,7 @@ async function _autoGrabForRequest(requestId: number): Promise<AutoGrabResult> {
         return result;
       } catch (e) {
         lastErr = e instanceof Error ? e.message : "Download failed";
-        console.log(`[AutoGrab] Result ${tried} failed: ${lastErr}`);
+        logger.log(`[AutoGrab] Result ${tried} failed: ${lastErr}`);
         if (skipFailing) recordIndexerFailure(r.indexer);
         // If request was deleted mid-grab, stop immediately
         if (lastErr.includes("no longer exists") || lastErr.includes("Foreign key")) {
@@ -191,13 +192,13 @@ async function verifyTorrentAdded(
   await new Promise((r) => setTimeout(r, 2000));
   const torrents = await qbit.getTorrents(undefined, category);
   let match = findInTorrents(torrents, normalized, hashLower);
-  if (match) { console.log(`[AutoGrab] Verified torrent in qBittorrent (${match})`); return; }
+  if (match) { logger.log(`[AutoGrab] Verified torrent in qBittorrent (${match})`); return; }
 
   // Slower retry after 5s more (for magnets needing DHT resolution)
   await new Promise((r) => setTimeout(r, 5000));
   const all = await qbit.getTorrents();
   match = findInTorrents(all, normalized, hashLower);
-  if (match) { console.log(`[AutoGrab] Verified torrent in qBittorrent (${match}, retry)`); return; }
+  if (match) { logger.log(`[AutoGrab] Verified torrent in qBittorrent (${match}, retry)`); return; }
 
   throw new Error("Torrent was not actually added to qBittorrent (silent failure)");
 }
@@ -226,16 +227,16 @@ async function grabTorrent(
   // Only add real magnet: URLs as the magnet strategy (not Prowlarr proxy URLs)
   if (r.magnetUrl?.startsWith("magnet:")) {
     strategies.push({ name: "magnet", fn: async () => {
-      console.log(`[AutoGrab] Using magnet URL: ${r.magnetUrl!.substring(0, 120)}...`);
+      logger.log(`[AutoGrab] Using magnet URL: ${r.magnetUrl!.substring(0, 120)}...`);
       await qbit.addTorrentByUrl(r.magnetUrl!, opts);
     }});
   }
   if (r.downloadUrl) {
     strategies.push({ name: "prowlarr-download", fn: async () => {
-      console.log(`[AutoGrab] Downloading via Prowlarr: ${r.downloadUrl!.replace(/([?&])(apikey|api_key)=[^&]*/gi, "$1$2=***").substring(0, 80)}...`);
+      logger.log(`[AutoGrab] Downloading via Prowlarr: ${r.downloadUrl!.replace(/([?&])(apikey|api_key)=[^&]*/gi, "$1$2=***").substring(0, 80)}...`);
       const result = await prowlarr.downloadFile(r.downloadUrl!, r.indexerId);
       if (result?.type === "magnet") {
-        console.log(`[AutoGrab] Got magnet link from download redirect`);
+        logger.log(`[AutoGrab] Got magnet link from download redirect`);
         await qbit.addTorrentByUrl(result.url, opts);
         usedMethod = "redirect-magnet";
       } else if (result?.type === "file" && result.data.length > 100) {
@@ -250,20 +251,20 @@ async function grabTorrent(
   if (r.infoHash) {
     strategies.push({ name: "infoHash-magnet", fn: async () => {
       const magnet = `magnet:?xt=urn:btih:${r.infoHash}&dn=${encodeURIComponent(r.title)}`;
-      console.log(`[AutoGrab] Constructed magnet from infoHash: ${r.infoHash}`);
+      logger.log(`[AutoGrab] Constructed magnet from infoHash: ${r.infoHash}`);
       await qbit.addTorrentByUrl(magnet, opts);
     }});
   }
   // Also try passing the Prowlarr proxy URL directly to qBit (works for some indexers)
   if (r.magnetUrl && !r.magnetUrl.startsWith("magnet:")) {
     strategies.push({ name: "proxy-url", fn: async () => {
-      console.log(`[AutoGrab] Trying Prowlarr proxy URL directly`);
+      logger.log(`[AutoGrab] Trying Prowlarr proxy URL directly`);
       await qbit.addTorrentByUrl(r.magnetUrl!, opts);
     }});
   }
   if (r.downloadUrl) {
     strategies.push({ name: "prowlarr-native-grab", fn: async () => {
-      console.log(`[AutoGrab] Trying Prowlarr-native grab`);
+      logger.log(`[AutoGrab] Trying Prowlarr-native grab`);
       const grabbed = await prowlarr.grabRelease(r);
       if (!grabbed) throw new Error("Prowlarr grab failed");
     }});
@@ -287,7 +288,7 @@ async function grabTorrent(
       break;
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed";
-      console.log(`[AutoGrab] Strategy ${strategy.name} failed: ${msg}`);
+      logger.log(`[AutoGrab] Strategy ${strategy.name} failed: ${msg}`);
       errors.push(`${strategy.name}: ${msg}`);
       usedMethod = "";
     }

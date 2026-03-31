@@ -3,6 +3,7 @@
  * Avoids re-reading Settings and re-creating clients on every call within a request cycle.
  */
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/utils";
 import { SABnzbdClient } from "@/lib/sabnzbd";
 import { QBittorrentClient } from "@/lib/qbittorrent";
 import { RomMClient } from "@/lib/romm";
@@ -80,14 +81,14 @@ export function debouncedScan(romm: RomMClient, platformId?: number): void {
     pendingScanPlatformId = null;
     try {
       if (platformId) {
-        console.log(`[RomM] Debounced scan: platform ${platformId}`);
+        logger.log(`[RomM] Debounced scan: platform ${platformId}`);
         await romm.scanPlatform(platformId);
       } else {
-        console.log(`[RomM] Debounced scan: full`);
+        logger.log(`[RomM] Debounced scan: full`);
         await romm.scanAll();
       }
     } catch (e) {
-      console.error(`[RomM] Debounced scan failed:`, e);
+      logger.error(`[RomM] Debounced scan failed:`, e);
     }
   }, 5000);
 }
