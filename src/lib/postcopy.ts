@@ -21,8 +21,9 @@ export async function copyToRomMLibrary(
 ): Promise<boolean> {
   const settings = await prisma.settings.findUnique({ where: { id: 1 } });
   if (!settings?.rommLibraryPath) {
-    logger.log(`[PostCopy] No RomM library path configured, skipping copy`);
-    return false;
+    logger.log(`[PostCopy] No RomM library path configured, skipping copy — marking AVAILABLE directly`);
+    await prisma.request.update({ where: { id: requestId }, data: { status: "AVAILABLE" } });
+    return true; // treat as "copied" so copyAndScan triggers the scan
   }
 
   const download = await prisma.download.findUnique({
@@ -179,14 +180,18 @@ export function copyAndScan(requestId: number, downloadId: number): void {
       const dl = await prisma.download.findUnique({ where: { id: downloadId }, select: { status: true } });
       if (dl?.status === "FAILED") {
         logger.log(`[PostCopy] Download #${downloadId} was marked FAILED (wrong platform), sync loop will retry`);
-        return; // Don't trigger scan for failed downloads
+        return;
       }
 
-      if (copied) {
-        logger.log(`[PostCopy] Files copied for request #${requestId}, triggering RomM scan`);
-      } else {
-        logger.log(`[PostCopy] No files copied for request #${requestId}, triggering RomM scan anyway`);
+      if (!copied) {
+        // Copy failed — don't mark AVAILABLE, leave request in current state so admin can investigate
+        logger.error(`[PostCopy] No files were copied for request #${requestId} — NOT marking AVAILABLE. Check logs above for the reason.`);
+        return;
       }
+
+      // Files copied successfully — now mark the request AVAILABLE
+      await prisma.request.update({ where: { id: requestId }, data: { status: "AVAILABLE" } });
+      logger.log(`[PostCopy] Files copied for request #${requestId}, marked AVAILABLE, triggering RomM scan`);
 
       const req = await prisma.request.findUnique({
         where: { id: requestId },

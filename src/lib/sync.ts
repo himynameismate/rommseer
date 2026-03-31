@@ -118,10 +118,6 @@ interface StatusUpdate {
   data: { status?: string; progress?: number; error?: string; torrentHash?: string; stalledAt?: Date | null };
 }
 
-interface RequestUpdate {
-  id: number;
-  data: { status: string };
-}
 
 /**
  * Sync download statuses from SABnzbd/qBittorrent, auto-retry failed downloads.
@@ -135,7 +131,6 @@ export async function syncAndRetryDownloads(
   if (!downloads.length) return;
 
   const downloadUpdates: StatusUpdate[] = [];
-  const requestUpdates: RequestUpdate[] = [];
   const completedPairs: { requestId: number; downloadId: number }[] = [];
 
   // Sync SABnzbd status
@@ -162,9 +157,8 @@ export async function syncAndRetryDownloads(
         } else if (hs?.status === "Completed") {
           downloadUpdates.push({ id: dl.id, data: { status: "COMPLETED", progress: 100 } });
           dl.status = "COMPLETED";
-          requestUpdates.push({ id: dl.requestId, data: { status: "AVAILABLE" } });
           completedPairs.push({ requestId: dl.requestId, downloadId: dl.id });
-          logger.log(`[Sync] Request #${dl.requestId}: download completed, marked AVAILABLE`);
+          logger.log(`[Sync] Request #${dl.requestId}: download completed, starting copy`);
         } else if (qs) {
           const progress = Math.round(parseFloat(qs.percentage));
           if (progress !== Math.round(dl.progress)) {
@@ -221,9 +215,8 @@ export async function syncAndRetryDownloads(
         } else if (t.progress >= 1) {
           downloadUpdates.push({ id: dl.id, data: { status: "COMPLETED", progress: 100, stalledAt: null } });
           dl.status = "COMPLETED";
-          requestUpdates.push({ id: dl.requestId, data: { status: "AVAILABLE" } });
           completedPairs.push({ requestId: dl.requestId, downloadId: dl.id });
-          logger.log(`[Sync] Request #${dl.requestId}: torrent completed, marked AVAILABLE`);
+          logger.log(`[Sync] Request #${dl.requestId}: torrent completed, starting copy`);
         } else if (stallDetectEnabled && isTorrentShowingStall(t)) {
           const now = new Date();
           if (!dl.stalledAt) {
@@ -264,11 +257,10 @@ export async function syncAndRetryDownloads(
   }
 
   // Batch DB updates using a transaction
-  if (downloadUpdates.length > 0 || requestUpdates.length > 0) {
-    await prisma.$transaction([
-      ...downloadUpdates.map((u) => prisma.download.update({ where: { id: u.id }, data: u.data })),
-      ...requestUpdates.map((u) => prisma.request.update({ where: { id: u.id }, data: u.data })),
-    ]);
+  if (downloadUpdates.length > 0) {
+    await prisma.$transaction(
+      downloadUpdates.map((u) => prisma.download.update({ where: { id: u.id }, data: u.data }))
+    );
   }
 
   // Remove stalled/failed torrents from qBittorrent (free up space)
