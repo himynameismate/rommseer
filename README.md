@@ -38,6 +38,13 @@ Zero clicks with auto-approve. Fully automated end-to-end.
 - **Auto-Approve** — Optionally skip admin approval for new requests
 - **Manual Override** — Paste magnet links directly if auto-grab doesn't find what you need
 - **Multi-Platform Support** — Platform picker for games available on multiple platforms
+- **User Management** — Admin dashboard to manage users, roles, request quotas, and approval status
+- **Self-Registration** — Users can register with optional email verification and admin approval workflow
+- **Invite Links** — Generate expiring invite links for restricted registration
+- **Request Quotas** — Limit requests per user per configurable time period (0 = unlimited)
+- **In-App Notifications** — Bell icon with unread notification count, notification history page
+- **Bulk Admin Actions** — Select multiple requests and approve/decline in bulk
+- **Dry-Run Mode** — Test Prowlarr search templates without actually downloading
 - **Role-Based Access** — Admin and user roles with separate permissions
 - **Docker Ready** — Single container deployment, perfect for Unraid/NAS setups
 
