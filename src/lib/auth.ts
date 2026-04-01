@@ -39,6 +39,11 @@ export const authOptions: NextAuthOptions = {
           return null;
         }
 
+        // Block login for users pending admin approval
+        if (!user.isApproved) {
+          return null;
+        }
+
         return {
           id: user.id,
           email: user.email,

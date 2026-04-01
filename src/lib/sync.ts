@@ -234,7 +234,7 @@ export async function syncAndRetryDownloads(
         if (isFailed && hs) {
           downloadUpdates.push({ id: dl.id, data: { status: "FAILED", error: hs.fail_message || hs.status } });
           dl.status = "FAILED";
-          if (dl.indexer) recordIndexerFailure(dl.indexer);
+          if (dl.indexer) await recordIndexerFailure(dl.indexer);
         } else if (hs?.status === "Completed") {
           downloadUpdates.push({ id: dl.id, data: { status: "COMPLETED", progress: 100 } });
           dl.status = "COMPLETED";
@@ -282,7 +282,7 @@ export async function syncAndRetryDownloads(
             logger.log(`[Sync] Request #${dl.requestId}: torrent "${dl.torrentName || dl.torrentHash}" not found in qBittorrent after ${Math.round(ageMs / 60000)}min, marking FAILED`);
             downloadUpdates.push({ id: dl.id, data: { status: "FAILED", error: "Torrent not found in qBittorrent (never added or removed)" } });
             dl.status = "FAILED";
-            if (dl.indexer) recordIndexerFailure(dl.indexer);
+            if (dl.indexer) await recordIndexerFailure(dl.indexer);
           }
           continue;
         }
@@ -312,7 +312,7 @@ export async function syncAndRetryDownloads(
               downloadUpdates.push({ id: dl.id, data: { status: "FAILED", progress, error: `Stalled for ${Math.round(stalledMs / 60000)} minutes with no progress` } });
               dl.status = "FAILED";
               stalledHashes.push(t.hash);
-              if (dl.indexer) recordIndexerFailure(dl.indexer);
+              if (dl.indexer) await recordIndexerFailure(dl.indexer);
             } else {
               // Still within grace period — just update progress
               const remainingMin = Math.round((stallDetectMs - stalledMs) / 60000);

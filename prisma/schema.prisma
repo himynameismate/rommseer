@@ -8,16 +8,22 @@ datasource db {
 }
 
 model User {
-  id             String     @id @default(cuid())
-  name           String
-  email          String     @unique
-  hashedPassword String
-  role           String     @default("USER") // USER | ADMIN
-  avatar         String?
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
-  requests       Request[]
-  activities     Activity[]
+  id              String         @id @default(cuid())
+  name            String
+  email           String         @unique
+  hashedPassword  String
+  role            String         @default("USER") // USER | ADMIN
+  avatar          String?
+  isApproved      Boolean        @default(true) // For self-registration flow
+  approvedAt      DateTime?
+  requestQuota    Int            @default(0)    // Max requests per quota period (0 = unlimited)
+  requestQuotaDays Int           @default(7)    // Quota period in days
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  requests        Request[]
+  activities      Activity[]
+  notifications   Notification[]
+  invitesCreated  Invite[]
 }
 
 model Platform {
@@ -103,6 +109,8 @@ model Settings {
   notifyOnAvailable     Boolean @default(true)
   notifyOnFailed        Boolean @default(true)
   librarySyncHours      Int     @default(6) // How often to sync RomM library (0 = disabled)
+  prowlarrDryRun        Boolean @default(false) // Log auto-grab results without downloading
+  registrationEnabled   Boolean @default(false) // Allow self-registration
   initialized           Boolean @default(false)
 }
 
@@ -144,4 +152,39 @@ model Activity {
   @@index([requestId])
   @@index([createdAt])
   @@index([type])
+}
+
+model IndexerHealth {
+  indexer       String   @id
+  failureCount  Int      @default(0)
+  lastFailure   DateTime?
+  blockedUntil  DateTime?
+  updatedAt     DateTime @updatedAt
+}
+
+model Notification {
+  id        Int      @id @default(autoincrement())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  type      String   // REQUEST_APPROVED | REQUEST_DECLINED | DOWNLOAD_FAILED | AVAILABLE
+  message   String
+  link      String?  // e.g. /requests
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, read])
+  @@index([createdAt])
+}
+
+model Invite {
+  token       String    @id @default(cuid())
+  email       String?   // Optional: restrict to specific email
+  usedAt      DateTime?
+  usedBy      String?   // User ID who redeemed
+  createdById String
+  createdBy   User      @relation(fields: [createdById], references: [id])
+  expiresAt   DateTime
+  createdAt   DateTime  @default(now())
+
+  @@index([createdById])
 }

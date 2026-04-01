@@ -24,6 +24,7 @@ interface NotifyPayload {
   adminNote?: string | null;
   error?: string | null;
   extra?: string;
+  userId?: string;
 }
 
 const EVENT_COLORS: Record<NotifyEvent, number> = {
@@ -81,53 +82,84 @@ function shouldNotify(
 export async function notify(payload: NotifyPayload): Promise<void> {
   try {
     const settings = await prisma.settings.findUnique({ where: { id: 1 } });
-    if (!settings?.discordWebhookUrl) return;
 
-    if (!shouldNotify(payload.event, settings)) return;
+    // Discord webhook
+    if (settings?.discordWebhookUrl && shouldNotify(payload.event, settings)) {
+      let validUrl = false;
+      try {
+        const url = new URL(settings.discordWebhookUrl);
+        const hostname = url.hostname.toLowerCase();
+        const isLoopback = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "0.0.0.0";
+        validUrl = ["http:", "https:"].includes(url.protocol) && !isLoopback;
+      } catch { /* invalid URL */ }
 
-    // Validate webhook URL
-    try {
-      const url = new URL(settings.discordWebhookUrl);
-      if (!["http:", "https:"].includes(url.protocol)) return;
-    } catch {
-      return;
+      if (validUrl) {
+        const fields: { name: string; value: string; inline: boolean }[] = [
+          { name: "Platform", value: payload.platformName, inline: true },
+          { name: "Requested by", value: payload.userName, inline: true },
+        ];
+
+        if (payload.adminNote) {
+          fields.push({ name: "Note", value: payload.adminNote, inline: false });
+        }
+        if (payload.error) {
+          fields.push({ name: "Error", value: payload.error.slice(0, 200), inline: false });
+        }
+        if (payload.extra) {
+          fields.push({ name: "Details", value: payload.extra, inline: false });
+        }
+
+        const embed = {
+          title: `${EVENT_TITLES[payload.event]}: ${payload.gameName}`,
+          color: EVENT_COLORS[payload.event],
+          fields,
+          timestamp: new Date().toISOString(),
+          footer: { text: "Rommseer" },
+          ...(payload.coverUrl ? { thumbnail: { url: payload.coverUrl } } : {}),
+        };
+
+        const res = await fetch(settings.discordWebhookUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ embeds: [embed] }),
+        });
+
+        if (!res.ok) {
+          logger.error(`[Notify] Discord webhook failed: ${res.status} ${res.statusText}`);
+        }
+      }
     }
 
-    const fields: { name: string; value: string; inline: boolean }[] = [
-      { name: "Platform", value: payload.platformName, inline: true },
-      { name: "Requested by", value: payload.userName, inline: true },
-    ];
-
-    if (payload.adminNote) {
-      fields.push({ name: "Note", value: payload.adminNote, inline: false });
-    }
-    if (payload.error) {
-      fields.push({ name: "Error", value: payload.error.slice(0, 200), inline: false });
-    }
-    if (payload.extra) {
-      fields.push({ name: "Details", value: payload.extra, inline: false });
-    }
-
-    const embed = {
-      title: `${EVENT_TITLES[payload.event]}: ${payload.gameName}`,
-      color: EVENT_COLORS[payload.event],
-      fields,
-      timestamp: new Date().toISOString(),
-      footer: { text: "Rommseer" },
-      ...(payload.coverUrl ? { thumbnail: { url: payload.coverUrl } } : {}),
-    };
-
-    const res = await fetch(settings.discordWebhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ embeds: [embed] }),
-    });
-
-    if (!res.ok) {
-      logger.error(`[Notify] Discord webhook failed: ${res.status} ${res.statusText}`);
+    // In-app notification for user-facing events
+    if (payload.userId && ["APPROVED", "DECLINED", "DOWNLOAD_FAILED", "AVAILABLE"].includes(payload.event)) {
+      const typeMap: Record<string, string> = {
+        APPROVED: "REQUEST_APPROVED",
+        DECLINED: "REQUEST_DECLINED",
+        DOWNLOAD_FAILED: "DOWNLOAD_FAILED",
+        AVAILABLE: "AVAILABLE",
+      };
+      const notifType = typeMap[payload.event] || payload.event;
+      const notifMessage = `${EVENT_TITLES[payload.event]}: ${payload.gameName} (${payload.platformName})`;
+      await createNotification(payload.userId, notifType, notifMessage, "/requests");
     }
   } catch (e) {
     logger.error(`[Notify] Error:`, e instanceof Error ? e.message : e);
+  }
+}
+
+/** Create an in-app notification for a user. Fire-and-forget safe. */
+export async function createNotification(
+  userId: string,
+  type: string,
+  message: string,
+  link?: string
+): Promise<void> {
+  try {
+    await prisma.notification.create({
+      data: { userId, type, message, link },
+    });
+  } catch (e) {
+    logger.error("[Notification] Failed to create:", e instanceof Error ? e.message : e);
   }
 }
 

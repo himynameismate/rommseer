@@ -17,41 +17,35 @@ interface AutoGrabResult {
 // Track in-progress grabs to prevent concurrent grabs for the same request
 const activeGrabs = new Set<number>();
 
-// Track indexer failures to skip broken indexers
-// After INDEXER_FAIL_THRESHOLD consecutive download failures, skip results from that indexer
-// for INDEXER_COOLDOWN_MS before trying again
+// Track indexer failures to skip broken indexers (persisted in DB via IndexerHealth)
 const INDEXER_FAIL_THRESHOLD = 3;
 const INDEXER_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
-const indexerFailures = new Map<string, { count: number; lastFailure: number }>();
 
-export function recordIndexerFailure(indexer: string): void {
-  // Prune entries older than cooldown to prevent unbounded growth
-  if (indexerFailures.size > 50) {
-    const now = Date.now();
-    Array.from(indexerFailures.entries()).forEach(([key, val]) => {
-      if (now - val.lastFailure > INDEXER_COOLDOWN_MS * 2) indexerFailures.delete(key);
+export async function recordIndexerFailure(indexer: string): Promise<void> {
+  const record = await prisma.indexerHealth.upsert({
+    where: { indexer },
+    create: { indexer, failureCount: 1, lastFailure: new Date() },
+    update: { failureCount: { increment: 1 }, lastFailure: new Date() },
+  });
+  if (record.failureCount >= INDEXER_FAIL_THRESHOLD && !record.blockedUntil) {
+    await prisma.indexerHealth.update({
+      where: { indexer },
+      data: { blockedUntil: new Date(Date.now() + INDEXER_COOLDOWN_MS) },
     });
-  }
-  const existing = indexerFailures.get(indexer) || { count: 0, lastFailure: 0 };
-  existing.count++;
-  existing.lastFailure = Date.now();
-  indexerFailures.set(indexer, existing);
-  if (existing.count === INDEXER_FAIL_THRESHOLD) {
-    logger.log(`[AutoGrab] Indexer "${indexer}" blocked after ${existing.count} failures (30 min cooldown)`);
+    logger.log(`[AutoGrab] Indexer "${indexer}" blocked after ${record.failureCount} failures (30 min cooldown)`);
   }
 }
 
-function recordIndexerSuccess(indexer: string): void {
-  indexerFailures.delete(indexer);
+async function recordIndexerSuccess(indexer: string): Promise<void> {
+  await prisma.indexerHealth.deleteMany({ where: { indexer } });
 }
 
-function isIndexerBlocked(indexer: string): boolean {
-  const record = indexerFailures.get(indexer);
-  if (!record || record.count < INDEXER_FAIL_THRESHOLD) return false;
-  // Reset after cooldown
-  if (Date.now() - record.lastFailure > INDEXER_COOLDOWN_MS) {
+async function isIndexerBlocked(indexer: string): Promise<boolean> {
+  const record = await prisma.indexerHealth.findUnique({ where: { indexer } });
+  if (!record || record.failureCount < INDEXER_FAIL_THRESHOLD || !record.blockedUntil) return false;
+  if (new Date() > record.blockedUntil) {
     logger.log(`[AutoGrab] Indexer "${indexer}" cooldown expired, retrying`);
-    indexerFailures.delete(indexer);
+    await prisma.indexerHealth.delete({ where: { indexer } });
     return false;
   }
   return true;
@@ -117,12 +111,28 @@ async function _autoGrabForRequest(requestId: number): Promise<AutoGrabResult> {
 
     // Filter out results from blocked indexers (if enabled)
     const skipFailing = settings.prowlarrSkipFailingIndexers !== false; // default true
-    const blocked = skipFailing ? results.filter((r) => isIndexerBlocked(r.indexer)) : [];
-    const viable = skipFailing ? results.filter((r) => !isIndexerBlocked(r.indexer)) : results;
-    const blockedIndexerNames = Array.from(new Set(blocked.map((r) => r.indexer))).join(", ");
-    if (blocked.length) logger.log(`[AutoGrab] Skipping ${blocked.length} results from blocked indexers: ${blockedIndexerNames}`);
-    if (!viable.length && blocked.length) {
-      return { success: false, message: `All ${results.length} results from blocked indexers (${blockedIndexerNames})` };
+    let viable = results;
+    if (skipFailing) {
+      const blockedStatuses = await Promise.all(results.map((r) => isIndexerBlocked(r.indexer)));
+      const blocked = results.filter((_, i) => blockedStatuses[i]);
+      viable = results.filter((_, i) => !blockedStatuses[i]);
+      if (blocked.length) {
+        const blockedIndexerNames = Array.from(new Set(blocked.map((r) => r.indexer))).join(", ");
+        logger.log(`[AutoGrab] Skipping ${blocked.length} results from blocked indexers: ${blockedIndexerNames}`);
+        if (!viable.length) {
+          return { success: false, message: `All ${results.length} results from blocked indexers (${blockedIndexerNames})` };
+        }
+      }
+    }
+
+    // Dry-run mode: log results without downloading
+    if (settings.prowlarrDryRun) {
+      const top = viable.slice(0, 5);
+      for (const r of top) {
+        logger.log(`[DRY RUN] Would grab: "${r.title}" (${r.protocol}, ${r.indexer}, seeders: ${r.seeders ?? "n/a"})`);
+      }
+      const best = top[0];
+      return { success: true, message: `[DRY RUN] Would grab: "${best.title}" from ${best.indexer} (${viable.length} viable results)`, torrentTitle: best.title, indexer: best.indexer };
     }
 
     // Try up to 5 results
@@ -141,12 +151,12 @@ async function _autoGrabForRequest(requestId: number): Promise<AutoGrabResult> {
           if (!qbit) { lastErr = "qBittorrent not configured"; continue; }
           result = await grabTorrent(prowlarr, qbit, r, requestId, settings, request.game.name);
         }
-        if (skipFailing) recordIndexerSuccess(r.indexer);
+        if (skipFailing) await recordIndexerSuccess(r.indexer);
         return result;
       } catch (e) {
         lastErr = e instanceof Error ? e.message : "Download failed";
         logger.log(`[AutoGrab] Result ${tried} failed: ${lastErr}`);
-        if (skipFailing) recordIndexerFailure(r.indexer);
+        if (skipFailing) await recordIndexerFailure(r.indexer);
         // If request was deleted mid-grab, stop immediately
         if (lastErr.includes("no longer exists") || lastErr.includes("Foreign key")) {
           return { success: false, message: "Request was deleted" };

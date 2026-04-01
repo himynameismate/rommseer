@@ -107,6 +107,8 @@ export async function PUT(req: NextRequest) {
     notifyOnAvailable,
     notifyOnFailed,
     librarySyncHours,
+    prowlarrDryRun,
+    registrationEnabled,
   } = body;
 
   // Validate URL fields use http:// or https:// schemes only
@@ -188,6 +190,8 @@ export async function PUT(req: NextRequest) {
   if (notifyOnAvailable !== undefined) data.notifyOnAvailable = notifyOnAvailable;
   if (notifyOnFailed !== undefined) data.notifyOnFailed = notifyOnFailed;
   if (librarySyncHours !== undefined) data.librarySyncHours = Number(librarySyncHours);
+  if (prowlarrDryRun !== undefined) data.prowlarrDryRun = prowlarrDryRun;
+  if (registrationEnabled !== undefined) data.registrationEnabled = registrationEnabled;
 
   const settings = await prisma.settings.upsert({
     where: { id: 1 },
@@ -226,6 +230,8 @@ export async function PUT(req: NextRequest) {
       notifyOnAvailable: notifyOnAvailable ?? true,
       notifyOnFailed: notifyOnFailed ?? true,
       librarySyncHours: librarySyncHours ?? 6,
+      prowlarrDryRun: prowlarrDryRun ?? false,
+      registrationEnabled: registrationEnabled ?? false,
       initialized: true,
     },
     update: data,

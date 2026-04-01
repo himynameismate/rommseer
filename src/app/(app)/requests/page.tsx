@@ -105,6 +105,10 @@ export default function RequestsPage() {
   // Auto-grab notification
   const [autoGrabMessage, setAutoGrabMessage] = useState<string | null>(null);
 
+  // Bulk selection
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkLoading, setBulkLoading] = useState(false);
+
   const isAdmin = session?.user?.role === "ADMIN";
 
   const fetchRequests = useCallback(async () => {
@@ -244,6 +248,38 @@ export default function RequestsPage() {
     if (res.ok) fetchRequests();
   };
 
+  const toggleSelect = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === requests.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(requests.map((r) => r.id)));
+    }
+  };
+
+  const bulkAction = async (status: string) => {
+    setBulkLoading(true);
+    const promises = Array.from(selectedIds).map((id) =>
+      fetch(`/api/requests/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      })
+    );
+    await Promise.all(promises);
+    setSelectedIds(new Set());
+    setBulkLoading(false);
+    fetchRequests();
+  };
+
   const filters = [
     "ALL",
     "PENDING",
@@ -276,7 +312,7 @@ export default function RequestsPage() {
       )}
 
       {/* Filters */}
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {filters.map((f) => (
           <Button
             key={f}
@@ -287,7 +323,53 @@ export default function RequestsPage() {
             {f === "ALL" ? "All" : f.charAt(0) + f.slice(1).toLowerCase()}
           </Button>
         ))}
+        {isAdmin && requests.length > 0 && (
+          <label className="ml-auto flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={selectedIds.size === requests.length && requests.length > 0}
+              onChange={toggleSelectAll}
+              className="h-4 w-4 rounded border-gray-300"
+            />
+            Select all
+          </label>
+        )}
       </div>
+
+      {/* Bulk action bar */}
+      {isAdmin && selectedIds.size > 0 && (
+        <div className="flex items-center gap-3 rounded-lg border bg-card px-4 py-3">
+          <span className="text-sm font-medium">{selectedIds.size} selected</span>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="default"
+              className="bg-green-600 hover:bg-green-700"
+              disabled={bulkLoading}
+              onClick={() => bulkAction("APPROVED")}
+            >
+              <CheckCircle2 className="mr-1 h-3 w-3" />
+              Approve
+            </Button>
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={bulkLoading}
+              onClick={() => bulkAction("DECLINED")}
+            >
+              <XCircle className="mr-1 h-3 w-3" />
+              Decline
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setSelectedIds(new Set())}
+            >
+              Clear
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Requests List */}
       {loading ? (
@@ -315,6 +397,15 @@ export default function RequestsPage() {
             <Card key={request.id}>
               <CardContent className="p-4">
                 <div className="flex items-center gap-4">
+                  {/* Bulk selection checkbox */}
+                  {isAdmin && (
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(request.id)}
+                      onChange={() => toggleSelect(request.id)}
+                      className="h-4 w-4 flex-shrink-0 rounded border-gray-300"
+                    />
+                  )}
                   {/* Cover thumbnail */}
                   <div className="h-16 w-12 flex-shrink-0 overflow-hidden rounded bg-muted">
                     {request.game.coverUrl ? (

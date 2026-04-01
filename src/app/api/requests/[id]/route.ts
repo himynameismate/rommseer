@@ -138,17 +138,17 @@ export async function PATCH(
     logActivity("APPROVED", `"${gameName}" approved by ${session.user.name}`, {
       userId: session.user.id, requestId: request.id,
     });
-    notify({ event: "APPROVED", gameName, platformName, userName, coverUrl });
+    notify({ event: "APPROVED", gameName, platformName, userName, coverUrl, userId: request.userId });
   } else if (status === "DECLINED") {
     logActivity("DECLINED", `"${gameName}" declined by ${session.user.name}${adminNote ? `: ${adminNote}` : ""}`, {
       userId: session.user.id, requestId: request.id, metadata: adminNote ? { reason: adminNote } : undefined,
     });
-    notify({ event: "DECLINED", gameName, platformName, userName, coverUrl, adminNote });
+    notify({ event: "DECLINED", gameName, platformName, userName, coverUrl, adminNote, userId: request.userId });
   } else if (status === "AVAILABLE") {
     logActivity("AVAILABLE", `"${gameName}" marked available by ${session.user.name}`, {
       userId: session.user.id, requestId: request.id,
     });
-    notify({ event: "AVAILABLE", gameName, platformName, userName, coverUrl });
+    notify({ event: "AVAILABLE", gameName, platformName, userName, coverUrl, userId: request.userId });
   }
 
   // If approved from PENDING, try auto-grab via Prowlarr (non-blocking)

@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,6 +15,18 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [registrationEnabled, setRegistrationEnabled] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/settings/public")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.registrationEnabled) {
+          setRegistrationEnabled(true);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -85,6 +98,14 @@ export default function LoginPage() {
               {loading ? "Signing in..." : "Sign In"}
             </Button>
           </form>
+          {registrationEnabled && (
+            <p className="mt-4 text-center text-sm text-muted-foreground">
+              Don&apos;t have an account?{" "}
+              <Link href="/register" className="text-primary hover:underline">
+                Register
+              </Link>
+            </p>
+          )}
         </CardContent>
       </Card>
     </div>

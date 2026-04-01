@@ -57,6 +57,8 @@ interface SettingsData {
   notifyOnAvailable: boolean;
   notifyOnFailed: boolean;
   librarySyncHours: number;
+  prowlarrDryRun: boolean;
+  registrationEnabled: boolean;
 }
 
 function ToggleSwitch({ checked, onChange, label, description }: {
@@ -138,6 +140,8 @@ export default function SettingsPage() {
     notifyOnAvailable: true,
     notifyOnFailed: true,
     librarySyncHours: 6,
+    prowlarrDryRun: false,
+    registrationEnabled: false,
   });
   const [saving, setSaving] = useState(false);
   const [testingRomm, setTestingRomm] = useState(false);
@@ -192,6 +196,8 @@ export default function SettingsPage() {
           notifyOnAvailable: data.notifyOnAvailable ?? true,
           notifyOnFailed: data.notifyOnFailed ?? true,
           librarySyncHours: data.librarySyncHours ?? 6,
+          prowlarrDryRun: data.prowlarrDryRun ?? false,
+          registrationEnabled: data.registrationEnabled ?? false,
         });
       })
       .catch(console.error);
@@ -243,6 +249,8 @@ export default function SettingsPage() {
           notifyOnAvailable: data.notifyOnAvailable ?? true,
           notifyOnFailed: data.notifyOnFailed ?? true,
           librarySyncHours: data.librarySyncHours ?? 6,
+          prowlarrDryRun: data.prowlarrDryRun ?? false,
+          registrationEnabled: data.registrationEnabled ?? false,
         });
         setSaved(true);
         setTimeout(() => setSaved(false), 3000);
@@ -373,6 +381,15 @@ export default function SettingsPage() {
                       admin review. If Prowlarr auto-grab is also enabled, the full
                       pipeline runs automatically: request &rarr; approve &rarr; search &rarr; download.
                     </p>
+                  </div>
+
+                  <div className="border-t pt-4 space-y-4">
+                    <ToggleSwitch
+                      checked={settings.registrationEnabled}
+                      onChange={(v) => setSettings((s) => ({ ...s, registrationEnabled: v }))}
+                      label="Self-Registration"
+                      description="Allow new users to register. They will need admin approval before they can sign in (unless using an invite link)."
+                    />
                   </div>
 
                   <div className="border-t pt-4 space-y-4">
@@ -705,6 +722,14 @@ export default function SettingsPage() {
                             failures. They will be retried after 30 minutes. Prevents
                             wasting time on broken indexers.
                           </p>
+                          <div className="sm:col-span-2 pt-2">
+                            <ToggleSwitch
+                              checked={settings.prowlarrDryRun}
+                              onChange={(v) => setSettings((s) => ({ ...s, prowlarrDryRun: v }))}
+                              label="Dry-Run Mode"
+                              description="Run full search + selection but log results without downloading. Great for debugging search templates."
+                            />
+                          </div>
                         </div>
                       )}
                     </div>

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard,
@@ -16,6 +16,8 @@ import {
   Gamepad2,
   Menu,
   X,
+  Users,
+  Bell,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -28,6 +30,7 @@ const navItems = [
 const adminItems = [
   { href: "/downloads", label: "Downloads", icon: Download },
   { href: "/activity", label: "Activity", icon: Activity },
+  { href: "/users", label: "Users", icon: Users },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
@@ -35,6 +38,26 @@ function SidebarContent({ onNavClick }: { onNavClick?: () => void }) {
   const pathname = usePathname();
   const { data: session } = useSession();
   const isAdmin = session?.user?.role === "ADMIN";
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  const fetchUnread = useCallback(async () => {
+    try {
+      const res = await fetch("/api/notifications?unread=true");
+      if (res.ok) {
+        const data = await res.json();
+        setUnreadCount(data.unreadCount ?? 0);
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  const userId = session?.user?.id;
+  useEffect(() => {
+    if (userId) {
+      fetchUnread();
+      const interval = setInterval(fetchUnread, 30000);
+      return () => clearInterval(interval);
+    }
+  }, [userId, fetchUnread]);
 
   return (
     <>
@@ -76,6 +99,28 @@ function SidebarContent({ onNavClick }: { onNavClick?: () => void }) {
             </Link>
           );
         })}
+
+        {/* Notifications */}
+        <Link
+          href="/notifications"
+          onClick={onNavClick}
+          className={cn(
+            "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+            pathname === "/notifications"
+              ? "bg-primary/10 text-primary"
+              : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+          )}
+        >
+          <div className="relative">
+            <Bell className="h-4 w-4" />
+            {unreadCount > 0 && (
+              <span className="absolute -right-1.5 -top-1.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-primary text-[9px] font-bold text-primary-foreground">
+                {unreadCount > 9 ? "9+" : unreadCount}
+              </span>
+            )}
+          </div>
+          Notifications
+        </Link>
 
         {isAdmin && (
           <>

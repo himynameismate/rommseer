@@ -130,22 +130,53 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Check request quota
+  const requestingUser = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { requestQuota: true, requestQuotaDays: true },
+  });
+  if (requestingUser && requestingUser.requestQuota > 0) {
+    const since = new Date();
+    since.setDate(since.getDate() - (requestingUser.requestQuotaDays || 7));
+    const recentCount = await prisma.request.count({
+      where: { userId: session.user.id, createdAt: { gte: since } },
+    });
+    if (recentCount >= requestingUser.requestQuota) {
+      return NextResponse.json(
+        { error: `Request quota exceeded (${requestingUser.requestQuota} per ${requestingUser.requestQuotaDays} days)` },
+        { status: 429 }
+      );
+    }
+  }
+
   // Check if auto-approve is enabled
   const settings = await prisma.settings.findUnique({ where: { id: 1 } });
   const shouldAutoApprove = settings?.autoApprove ?? false;
 
-  const request = await prisma.request.create({
-    data: {
-      userId: session.user.id,
-      gameId: Number(gameId),
-      comment,
-      status: shouldAutoApprove ? "APPROVED" : "PENDING",
-    },
-    include: {
-      game: { include: { platform: true } },
-      user: { select: { id: true, name: true, email: true } },
-    },
-  });
+  let request;
+  try {
+    request = await prisma.request.create({
+      data: {
+        userId: session.user.id,
+        gameId: Number(gameId),
+        comment,
+        status: shouldAutoApprove ? "APPROVED" : "PENDING",
+      },
+      include: {
+        game: { include: { platform: true } },
+        user: { select: { id: true, name: true, email: true } },
+      },
+    });
+  } catch (e) {
+    // Handle race condition: unique constraint on userId_gameId
+    if (e instanceof Error && e.message.includes("Unique constraint")) {
+      return NextResponse.json(
+        { error: "You have already requested this game" },
+        { status: 409 }
+      );
+    }
+    throw e;
+  }
 
   // Log activity + notify
   const userName = session.user.name || "Unknown";
@@ -154,7 +185,7 @@ export async function POST(req: NextRequest) {
   });
   notify({
     event: "REQUEST_CREATED", gameName: request.game.name, platformName: request.game.platform.name,
-    userName, coverUrl: request.game.coverUrl,
+    userName, coverUrl: request.game.coverUrl, userId: session.user.id,
   });
 
   // If auto-approved and auto-grab is enabled, trigger auto-grab in the background
