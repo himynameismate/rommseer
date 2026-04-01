@@ -36,11 +36,11 @@ export async function recordIndexerFailure(indexer: string): Promise<void> {
   }
 }
 
-async function recordIndexerSuccess(indexer: string): Promise<void> {
+export async function recordIndexerSuccess(indexer: string): Promise<void> {
   await prisma.indexerHealth.deleteMany({ where: { indexer } });
 }
 
-async function isIndexerBlocked(indexer: string): Promise<boolean> {
+export async function isIndexerBlocked(indexer: string): Promise<boolean> {
   const record = await prisma.indexerHealth.findUnique({ where: { indexer } });
   if (!record || record.failureCount < INDEXER_FAIL_THRESHOLD || !record.blockedUntil) return false;
   if (new Date() > record.blockedUntil) {

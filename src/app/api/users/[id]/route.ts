@@ -48,10 +48,18 @@ export async function PATCH(
     }
   }
 
-  const user = await prisma.user.update({
-    where: { id: params.id },
-    data,
-  });
+  let user;
+  try {
+    user = await prisma.user.update({
+      where: { id: params.id },
+      data,
+    });
+  } catch (e) {
+    if (e instanceof Error && e.message.includes("Record to update not found")) {
+      return NextResponse.json({ error: "User not found" }, { status: 404 });
+    }
+    throw e;
+  }
 
   return NextResponse.json(user);
 }
