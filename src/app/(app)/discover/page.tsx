@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,15 +25,48 @@ interface SearchResult {
   requestCount: number;
 }
 
-export default function DiscoverPage() {
-  const [query, setQuery] = useState("");
+function DiscoverContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const [query, setQuery] = useState(searchParams.get("q") || "");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [requesting, setRequesting] = useState<string | null>(null); // "igdbId-platformSlug"
   const [requested, setRequested] = useState<Set<string>>(new Set()); // "igdbId-platformSlug"
   const [error, setError] = useState("");
-  const [selectedPlatform, setSelectedPlatform] = useState<string | null>(null);
+  const [selectedPlatform, setSelectedPlatform] = useState<string | null>(
+    searchParams.get("platform") || null
+  );
   const [pickingPlatform, setPickingPlatform] = useState<number | null>(null); // igdbId of game showing platform picker
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const initialSearchDone = useRef(false);
+
+  // Auto-dismiss toast
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 3000);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  // Autofocus search input on mount
+  useEffect(() => {
+    searchInputRef.current?.focus();
+  }, []);
+
+  // Update URL params when search/filter changes
+  const updateUrl = useCallback(
+    (q: string, platform: string | null) => {
+      const params = new URLSearchParams();
+      if (q) params.set("q", q);
+      if (platform) params.set("platform", platform);
+      const search = params.toString();
+      router.replace(`/discover${search ? `?${search}` : ""}`, { scroll: false });
+    },
+    [router]
+  );
 
   // Extract unique platforms from results
   const availablePlatforms = useMemo(() => {
@@ -58,32 +92,57 @@ export default function DiscoverPage() {
     );
   }, [results, selectedPlatform]);
 
+  const doSearch = useCallback(
+    async (searchQuery: string) => {
+      if (!searchQuery.trim()) return;
+
+      setSearching(true);
+      setError("");
+      setSelectedPlatform(null);
+
+      try {
+        const res = await fetch(
+          `/api/games/search?q=${encodeURIComponent(searchQuery)}`
+        );
+        const data = await res.json();
+
+        if (!res.ok) {
+          setError(data.error || "Search failed");
+          setResults([]);
+        } else {
+          setResults(data);
+        }
+      } catch {
+        setError("Failed to search. Check your IGDB configuration.");
+        setResults([]);
+      } finally {
+        setSearching(false);
+      }
+    },
+    []
+  );
+
+  // Auto-search on mount if q param present
+  useEffect(() => {
+    if (initialSearchDone.current) return;
+    initialSearchDone.current = true;
+    const q = searchParams.get("q");
+    if (q) {
+      doSearch(q);
+    }
+  }, [searchParams, doSearch]);
+
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!query.trim()) return;
+    updateUrl(query, null);
+    await doSearch(query);
+  };
 
-    setSearching(true);
-    setError("");
-    setSelectedPlatform(null);
-
-    try {
-      const res = await fetch(
-        `/api/games/search?q=${encodeURIComponent(query)}`
-      );
-      const data = await res.json();
-
-      if (!res.ok) {
-        setError(data.error || "Search failed");
-        setResults([]);
-      } else {
-        setResults(data);
-      }
-    } catch {
-      setError("Failed to search. Check your IGDB configuration.");
-      setResults([]);
-    } finally {
-      setSearching(false);
-    }
+  const handlePlatformFilter = (slug: string | null) => {
+    const newPlatform = selectedPlatform === slug ? null : slug;
+    setSelectedPlatform(newPlatform);
+    updateUrl(query, newPlatform);
   };
 
   const handleRequest = async (result: SearchResult, platform: { id: number; name: string; slug: string }) => {
@@ -103,6 +162,7 @@ export default function DiscoverPage() {
           releaseDate: result.releaseDate,
           rating: result.rating,
           platformSlug: platform.slug,
+          platformName: platform.name,
         }),
       });
 
@@ -116,12 +176,13 @@ export default function DiscoverPage() {
 
       if (reqRes.ok) {
         setRequested((prev) => new Set(prev).add(key));
+        setToast({ message: `Requested ${result.name} (${platform.name})`, type: "success" });
       } else {
         const data = await reqRes.json();
-        setError(data.error || "Failed to submit request");
+        setToast({ message: data.error || "Failed to submit request", type: "error" });
       }
     } catch {
-      setError("Failed to submit request");
+      setToast({ message: "Failed to submit request", type: "error" });
     } finally {
       setRequesting(null);
     }
@@ -136,11 +197,25 @@ export default function DiscoverPage() {
         </p>
       </div>
 
+      {/* Toast */}
+      {toast && (
+        <div
+          className={`fixed top-4 right-4 z-50 rounded-md px-4 py-3 text-sm shadow-lg transition-opacity ${
+            toast.type === "success"
+              ? "bg-green-600 text-white"
+              : "bg-destructive text-destructive-foreground"
+          }`}
+        >
+          {toast.message}
+        </div>
+      )}
+
       {/* Search */}
       <form onSubmit={handleSearch} className="flex gap-3">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
+            ref={searchInputRef}
             placeholder="Search for a game..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -173,7 +248,7 @@ export default function DiscoverPage() {
                 variant="ghost"
                 size="sm"
                 className="h-6 gap-1 px-2 text-xs"
-                onClick={() => setSelectedPlatform(null)}
+                onClick={() => handlePlatformFilter(null)}
               >
                 <X className="h-3 w-3" />
                 Clear
@@ -187,11 +262,7 @@ export default function DiscoverPage() {
                 variant={selectedPlatform === platform.slug ? "default" : "outline"}
                 size="sm"
                 className="h-7 text-xs"
-                onClick={() =>
-                  setSelectedPlatform(
-                    selectedPlatform === platform.slug ? null : platform.slug
-                  )
-                }
+                onClick={() => handlePlatformFilter(platform.slug)}
               >
                 {platform.name}
               </Button>
@@ -208,151 +279,175 @@ export default function DiscoverPage() {
       {/* Results */}
       {filteredResults.length > 0 && (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {filteredResults.map((result) => (
-            <Card
-              key={result.igdbId}
-              className="overflow-hidden transition-shadow hover:shadow-lg"
-            >
-              <div className="relative aspect-[3/4] w-full bg-muted">
-                {result.coverUrl ? (
-                  <Image
-                    src={result.coverUrl}
-                    alt={result.name}
-                    fill
-                    className="object-cover"
-                    sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
-                  />
-                ) : (
-                  <div className="flex h-full items-center justify-center text-muted-foreground">
-                    No Cover
+          {filteredResults.map((result) => {
+            // Sort platforms: active filter first
+            const sortedPlatforms = selectedPlatform
+              ? [...result.platforms].sort((a, b) => {
+                  if (a.slug === selectedPlatform && b.slug !== selectedPlatform) return -1;
+                  if (b.slug === selectedPlatform && a.slug !== selectedPlatform) return 1;
+                  return a.name.localeCompare(b.name);
+                })
+              : result.platforms;
+
+            // Count unrequested platforms for multi-platform button
+            const unrequestedPlatforms = result.platforms.filter(
+              (p) => !requested.has(`${result.igdbId}-${p.slug}`)
+            );
+            const allRequested = unrequestedPlatforms.length === 0;
+
+            return (
+              <Card
+                key={result.igdbId}
+                className="overflow-hidden transition-shadow hover:shadow-lg"
+              >
+                <div className="relative aspect-[3/4] w-full bg-muted">
+                  {result.coverUrl ? (
+                    <Image
+                      src={result.coverUrl}
+                      alt={result.name}
+                      fill
+                      className="object-cover"
+                      sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
+                    />
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-muted-foreground">
+                      No Cover
+                    </div>
+                  )}
+                  {result.isAvailable && (
+                    <Badge className="absolute right-2 top-2 bg-green-600">
+                      Available
+                    </Badge>
+                  )}
+                </div>
+                <CardContent className="space-y-3 p-4">
+                  <div>
+                    <h3 className="line-clamp-1 font-semibold" title={result.name}>
+                      {result.name}
+                    </h3>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {sortedPlatforms.slice(0, 3).map((p) => (
+                        <Badge
+                          key={p.id}
+                          variant="outline"
+                          className={`text-[10px] ${
+                            selectedPlatform === p.slug
+                              ? "border-primary text-primary"
+                              : ""
+                          }`}
+                        >
+                          {p.name}
+                        </Badge>
+                      ))}
+                      {result.platforms.length > 3 && (
+                        <Badge variant="outline" className="text-[10px]">
+                          +{result.platforms.length - 3}
+                        </Badge>
+                      )}
+                    </div>
                   </div>
-                )}
-                {result.isAvailable && (
-                  <Badge className="absolute right-2 top-2 bg-green-600">
-                    Available
-                  </Badge>
-                )}
-              </div>
-              <CardContent className="space-y-3 p-4">
-                <div>
-                  <h3 className="line-clamp-1 font-semibold">{result.name}</h3>
-                  <div className="mt-1 flex flex-wrap gap-1">
-                    {result.platforms.slice(0, 3).map((p) => (
-                      <Badge
-                        key={p.id}
-                        variant="outline"
-                        className={`text-[10px] ${
-                          selectedPlatform === p.slug
-                            ? "border-primary text-primary"
-                            : ""
-                        }`}
-                      >
-                        {p.name}
-                      </Badge>
-                    ))}
-                    {result.platforms.length > 3 && (
-                      <Badge variant="outline" className="text-[10px]">
-                        +{result.platforms.length - 3}
-                      </Badge>
+
+                  <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                    {result.releaseDate && (
+                      <span>{result.releaseDate.substring(0, 4)}</span>
+                    )}
+                    {result.rating && (
+                      <span className="flex items-center gap-1">
+                        <Star className="h-3 w-3 fill-yellow-500 text-yellow-500" />
+                        {result.rating}
+                      </span>
                     )}
                   </div>
-                </div>
 
-                <div className="flex items-center gap-3 text-sm text-muted-foreground">
-                  {result.releaseDate && (
-                    <span>{result.releaseDate.substring(0, 4)}</span>
+                  {result.summary && (
+                    <p className="line-clamp-2 text-xs text-muted-foreground">
+                      {result.summary}
+                    </p>
                   )}
-                  {result.rating && (
-                    <span className="flex items-center gap-1">
-                      <Star className="h-3 w-3 fill-yellow-500 text-yellow-500" />
-                      {result.rating}
-                    </span>
-                  )}
-                </div>
 
-                {result.summary && (
-                  <p className="line-clamp-2 text-xs text-muted-foreground">
-                    {result.summary}
-                  </p>
-                )}
-
-                {/* Platform picker or single-platform request button */}
-                {result.isAvailable ? (
-                  <Button className="w-full" size="sm" disabled>
-                    <Check className="mr-2 h-4 w-4" />
-                    In Library
-                  </Button>
-                ) : pickingPlatform === result.igdbId ? (
-                  <div className="space-y-1.5">
-                    <p className="text-xs text-muted-foreground text-center">Select platform:</p>
-                    {result.platforms.map((p) => {
-                      const key = `${result.igdbId}-${p.slug}`;
-                      const done = requested.has(key);
-                      const loading = requesting === key;
-                      return (
-                        <Button
-                          key={p.slug}
-                          className="w-full justify-start"
-                          size="sm"
-                          variant={done ? "secondary" : "outline"}
-                          disabled={done || loading}
-                          onClick={() => handleRequest(result, p)}
-                        >
-                          {loading ? (
-                            <Loader2 className="mr-2 h-3 w-3 animate-spin" />
-                          ) : done ? (
-                            <Check className="mr-2 h-3 w-3" />
-                          ) : (
-                            <Plus className="mr-2 h-3 w-3" />
-                          )}
-                          <span className="truncate">{p.name}</span>
-                        </Button>
-                      );
-                    })}
+                  {/* Platform picker or single-platform request button */}
+                  {result.isAvailable ? (
+                    <Button className="w-full" size="sm" disabled>
+                      <Check className="mr-2 h-4 w-4" />
+                      In Library
+                    </Button>
+                  ) : pickingPlatform === result.igdbId ? (
+                    <div className="space-y-1.5">
+                      <p className="text-xs text-muted-foreground text-center">Select platform:</p>
+                      {sortedPlatforms.map((p) => {
+                        const key = `${result.igdbId}-${p.slug}`;
+                        const done = requested.has(key);
+                        const loading = requesting === key;
+                        return (
+                          <Button
+                            key={p.slug}
+                            className="w-full justify-start"
+                            size="sm"
+                            variant={done ? "secondary" : "outline"}
+                            disabled={done || loading}
+                            onClick={() => handleRequest(result, p)}
+                          >
+                            {loading ? (
+                              <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                            ) : done ? (
+                              <Check className="mr-2 h-3 w-3" />
+                            ) : (
+                              <Plus className="mr-2 h-3 w-3" />
+                            )}
+                            <span className="truncate">{p.name}</span>
+                          </Button>
+                        );
+                      })}
+                      <Button
+                        className="w-full"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setPickingPlatform(null)}
+                      >
+                        <X className="mr-2 h-3 w-3" />
+                        Cancel
+                      </Button>
+                    </div>
+                  ) : result.platforms.length === 1 ? (
                     <Button
                       className="w-full"
                       size="sm"
-                      variant="ghost"
-                      onClick={() => setPickingPlatform(null)}
+                      disabled={requested.has(`${result.igdbId}-${result.platforms[0].slug}`) || requesting === `${result.igdbId}-${result.platforms[0].slug}`}
+                      onClick={() => handleRequest(result, result.platforms[0])}
                     >
-                      <X className="mr-2 h-3 w-3" />
-                      Cancel
+                      {requested.has(`${result.igdbId}-${result.platforms[0].slug}`) ? (
+                        <>
+                          <Check className="mr-2 h-4 w-4" />
+                          Requested
+                        </>
+                      ) : requesting === `${result.igdbId}-${result.platforms[0].slug}` ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <>
+                          <Plus className="mr-2 h-4 w-4" />
+                          Request
+                        </>
+                      )}
                     </Button>
-                  </div>
-                ) : result.platforms.length === 1 ? (
-                  <Button
-                    className="w-full"
-                    size="sm"
-                    disabled={requested.has(`${result.igdbId}-${result.platforms[0].slug}`) || requesting === `${result.igdbId}-${result.platforms[0].slug}`}
-                    onClick={() => handleRequest(result, result.platforms[0])}
-                  >
-                    {requested.has(`${result.igdbId}-${result.platforms[0].slug}`) ? (
-                      <>
-                        <Check className="mr-2 h-4 w-4" />
-                        Requested
-                      </>
-                    ) : requesting === `${result.igdbId}-${result.platforms[0].slug}` ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <>
-                        <Plus className="mr-2 h-4 w-4" />
-                        Request
-                      </>
-                    )}
-                  </Button>
-                ) : (
-                  <Button
-                    className="w-full"
-                    size="sm"
-                    onClick={() => setPickingPlatform(result.igdbId)}
-                  >
-                    <Plus className="mr-2 h-4 w-4" />
-                    Request ({result.platforms.length} platforms)
-                  </Button>
-                )}
-              </CardContent>
-            </Card>
-          ))}
+                  ) : allRequested ? (
+                    <Button className="w-full" size="sm" disabled>
+                      <Check className="mr-2 h-4 w-4" />
+                      Requested
+                    </Button>
+                  ) : (
+                    <Button
+                      className="w-full"
+                      size="sm"
+                      onClick={() => setPickingPlatform(result.igdbId)}
+                    >
+                      <Plus className="mr-2 h-4 w-4" />
+                      Request ({unrequestedPlatforms.length} platform{unrequestedPlatforms.length !== 1 ? "s" : ""})
+                    </Button>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       )}
 
@@ -362,7 +457,7 @@ export default function DiscoverPage() {
           <Button
             variant="link"
             className="px-1"
-            onClick={() => setSelectedPlatform(null)}
+            onClick={() => handlePlatformFilter(null)}
           >
             Clear filter
           </Button>
@@ -381,5 +476,13 @@ export default function DiscoverPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function DiscoverPage() {
+  return (
+    <Suspense>
+      <DiscoverContent />
+    </Suspense>
   );
 }

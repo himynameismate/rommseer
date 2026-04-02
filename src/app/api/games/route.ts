@@ -10,7 +10,7 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json();
-  const { igdbId, name, summary, coverUrl, releaseDate, rating, platformSlug } =
+  const { igdbId, name, summary, coverUrl, releaseDate, rating, platformSlug, platformName } =
     body;
 
   if (!name || !platformSlug) {
@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
 
   if (!platform) {
     platform = await prisma.platform.create({
-      data: { slug: platformSlug, name: platformSlug },
+      data: { slug: platformSlug, name: platformName || platformSlug },
     });
   }
 

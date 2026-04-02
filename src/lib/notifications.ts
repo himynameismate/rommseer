@@ -131,8 +131,9 @@ export async function notify(payload: NotifyPayload): Promise<void> {
     }
 
     // In-app notification for user-facing events
-    if (payload.userId && ["APPROVED", "DECLINED", "DOWNLOAD_FAILED", "AVAILABLE"].includes(payload.event)) {
+    if (payload.userId && ["REQUEST_CREATED", "APPROVED", "DECLINED", "DOWNLOAD_FAILED", "AVAILABLE"].includes(payload.event)) {
       const typeMap: Record<string, string> = {
+        REQUEST_CREATED: "REQUEST_CREATED",
         APPROVED: "REQUEST_APPROVED",
         DECLINED: "REQUEST_DECLINED",
         DOWNLOAD_FAILED: "DOWNLOAD_FAILED",
