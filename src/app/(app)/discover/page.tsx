@@ -98,7 +98,6 @@ function DiscoverContent() {
 
       setSearching(true);
       setError("");
-      setSelectedPlatform(null);
 
       try {
         const res = await fetch(
@@ -135,6 +134,7 @@ function DiscoverContent() {
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!query.trim()) return;
+    setSelectedPlatform(null);
     updateUrl(query, null);
     await doSearch(query);
   };
