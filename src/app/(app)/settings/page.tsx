@@ -426,7 +426,7 @@ export default function SettingsPage() {
                   <div>
                     <h2 className="text-lg font-semibold">RomM Connection</h2>
                     <p className="text-sm text-muted-foreground">
-                      Connect to your RomM instance to sync your ROM library
+                      Connect to your RomM instance via its REST API (OAuth2 token auth)
                     </p>
                   </div>
                   <div className="grid gap-4 sm:grid-cols-2">

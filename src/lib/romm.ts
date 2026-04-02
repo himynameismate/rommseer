@@ -26,12 +26,29 @@ interface RomMRom {
   url_cover: string;
 }
 
+interface TokenResponse {
+  access_token: string;
+  refresh_token: string;
+  token_type: string;
+}
+
+const TOKEN_REFRESH_BUFFER_MS = 60_000; // Refresh 1 minute before expiry
+const ACCESS_TOKEN_LIFETIME_MS = 15 * 60 * 1000; // 15 minutes
+
+/**
+ * RomM API client using OAuth2 bearer token authentication.
+ *
+ * Authenticates via POST /api/token with username/password to obtain
+ * an access_token (15 min) and refresh_token (2 weeks). All subsequent
+ * requests use Authorization: Bearer <access_token>.
+ */
 export class RomMClient {
   private baseUrl: string;
   private username: string;
   private password: string;
-  private sessionCookie: string | null = null;
-  private csrfToken: string | null = null;
+  private accessToken: string | null = null;
+  private refreshToken: string | null = null;
+  private tokenExpiresAt: number = 0;
 
   constructor(baseUrl: string, username: string, password: string) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
@@ -39,101 +56,120 @@ export class RomMClient {
     this.password = password;
   }
 
-  private async login(): Promise<void> {
-    if (this.sessionCookie) return;
+  /** Obtain a new access token using username/password. */
+  private async authenticate(): Promise<void> {
+    const scopes = [
+      "me.read",
+      "roms.read",
+      "platforms.read",
+      "assets.read",
+      "tasks.run",
+    ];
 
-    const basicAuth = Buffer.from(`${this.username}:${this.password}`).toString("base64");
+    const body = new URLSearchParams({
+      grant_type: "password",
+      username: this.username,
+      password: this.password,
+      scope: scopes.join(" "),
+    });
 
-    const response = await fetch(`${this.baseUrl}/api/login`, {
+    const response = await fetch(`${this.baseUrl}/api/token`, {
       method: "POST",
-      headers: { "Authorization": `Basic ${basicAuth}` },
-      redirect: "manual",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
     });
 
-    // Extract session cookie
-    const cookies: string[] = [];
-    response.headers.forEach((value, key) => {
-      if (key.toLowerCase() === "set-cookie") {
-        cookies.push(value.split(";")[0]);
-      }
-    });
-
-    const sessionCookie = cookies.find((c) => c.startsWith("romm_session="));
-    if (sessionCookie) {
-      this.sessionCookie = sessionCookie;
-    } else if (cookies.length > 0) {
-      this.sessionCookie = cookies[0];
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(
+        `RomM authentication failed: ${response.status} ${response.statusText}${text ? ` — ${text}` : ""}`
+      );
     }
 
-    if (!this.sessionCookie) {
-      throw new Error(`RomM login failed: ${response.status} ${response.statusText}`);
-    }
-
-    // Fetch CSRF token from heartbeat endpoint
-    await this.refreshCsrfToken();
+    const data: TokenResponse = await response.json();
+    this.accessToken = data.access_token;
+    this.refreshToken = data.refresh_token;
+    this.tokenExpiresAt = Date.now() + ACCESS_TOKEN_LIFETIME_MS;
+    logger.log("[RomM] Authenticated via OAuth2 token");
   }
 
-  /** Get a fresh CSRF token from RomM's heartbeat endpoint. */
-  private async refreshCsrfToken(): Promise<void> {
+  /** Use the refresh token to get a new access token without re-sending credentials. */
+  private async refreshAccessToken(): Promise<boolean> {
+    if (!this.refreshToken) return false;
+
     try {
-      const res = await fetch(`${this.baseUrl}/api/heartbeat`, {
-        headers: { Cookie: this.sessionCookie || "" },
+      const body = new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: this.refreshToken,
       });
-      res.headers.forEach((value, key) => {
-        if (key.toLowerCase() === "set-cookie" && value.includes("csrftoken")) {
-          const cookiePart = value.split(";")[0]; // romm_csrftoken=...
-          this.csrfToken = cookiePart.split("=").slice(1).join("=");
-        }
+
+      const response = await fetch(`${this.baseUrl}/api/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: body.toString(),
       });
-    } catch (e) {
-      logger.error("[RomM] Failed to get CSRF token:", e instanceof Error ? e.message : e);
+
+      if (!response.ok) {
+        logger.log("[RomM] Refresh token expired or invalid, re-authenticating");
+        return false;
+      }
+
+      const data: TokenResponse = await response.json();
+      this.accessToken = data.access_token;
+      this.refreshToken = data.refresh_token;
+      this.tokenExpiresAt = Date.now() + ACCESS_TOKEN_LIFETIME_MS;
+      logger.log("[RomM] Token refreshed via refresh_token");
+      return true;
+    } catch {
+      return false;
     }
   }
 
-  /** Build Cookie header string including session + CSRF cookies. */
-  private getCookieHeader(): string {
-    const parts = [this.sessionCookie];
-    if (this.csrfToken) parts.push(`romm_csrftoken=${this.csrfToken}`);
-    return parts.filter(Boolean).join("; ");
+  /** Ensure we have a valid access token, refreshing or re-authenticating as needed. */
+  private async ensureToken(): Promise<void> {
+    // Token still valid
+    if (this.accessToken && Date.now() < this.tokenExpiresAt - TOKEN_REFRESH_BUFFER_MS) {
+      return;
+    }
+
+    // Try refreshing first
+    if (this.refreshToken) {
+      const refreshed = await this.refreshAccessToken();
+      if (refreshed) return;
+    }
+
+    // Full re-authentication
+    await this.authenticate();
   }
 
   private async fetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
-    await this.login();
+    await this.ensureToken();
 
     const url = `${this.baseUrl}/api${endpoint}`;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
-      Cookie: this.getCookieHeader(),
+      Authorization: `Bearer ${this.accessToken}`,
     };
-
-    // Include CSRF token header for mutating requests
-    const method = (options?.method || "GET").toUpperCase();
-    if (method !== "GET" && method !== "HEAD" && this.csrfToken) {
-      headers["X-CSRFToken"] = this.csrfToken;
-    }
 
     const response = await fetch(url, {
       ...options,
       headers: { ...headers, ...((options?.headers as Record<string, string>) || {}) },
     });
 
-    // On 401/403, re-login and retry once
-    if (response.status === 401 || response.status === 403) {
-      this.sessionCookie = null;
-      this.csrfToken = null;
-      await this.login();
-
-      const retryHeaders: Record<string, string> = {
-        "Content-Type": "application/json",
-        Cookie: this.getCookieHeader(),
-      };
-      if (method !== "GET" && method !== "HEAD" && this.csrfToken) {
-        retryHeaders["X-CSRFToken"] = this.csrfToken;
-      }
+    // On 401, try re-authenticating once
+    if (response.status === 401) {
+      this.accessToken = null;
+      this.refreshToken = null;
+      this.tokenExpiresAt = 0;
+      await this.authenticate();
 
       const retryResponse = await fetch(url, {
         ...options,
-        headers: { ...retryHeaders, ...((options?.headers as Record<string, string>) || {}) },
+        headers: {
+          ...headers,
+          Authorization: `Bearer ${this.accessToken}`,
+          ...((options?.headers as Record<string, string>) || {}),
+        },
       });
 
       if (!retryResponse.ok) {
@@ -181,7 +217,7 @@ export class RomMClient {
    * @param scanType - "quick" (default) or "complete"
    */
   async triggerScan(platformIds: number[] = [], scanType: "quick" | "complete" = "quick"): Promise<void> {
-    await this.login();
+    await this.ensureToken();
 
     return new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -195,14 +231,14 @@ export class RomMClient {
         path: "/ws/socket.io/",
         transports: ["polling", "websocket"],
         extraHeaders: {
-          Cookie: this.getCookieHeader(),
+          Authorization: `Bearer ${this.accessToken}`,
         },
         withCredentials: true,
         timeout: 10_000,
       });
 
       socket.on("connect", () => {
-        logger.log(`[RomM] Socket connected, emitting scan event (type=${scanType}, platforms=${platformIds.join(",")||"all"})`);
+        logger.log(`[RomM] Socket connected, emitting scan event (type=${scanType}, platforms=${platformIds.join(",") || "all"})`);
         socket.emit("scan", {
           platforms: platformIds,
           type: scanType,
