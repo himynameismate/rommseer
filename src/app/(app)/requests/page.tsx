@@ -96,11 +96,15 @@ export default function RequestsPage() {
   const [searchingId, setSearchingId] = useState<number | null>(null);
   const [searchResults, setSearchResults] = useState<ProwlarrResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [grabbingGuid, setGrabbingGuid] = useState<string | null>(null);
 
   // Decline modal
   const [decliningId, setDecliningId] = useState<number | null>(null);
   const [declineNote, setDeclineNote] = useState("");
+
+  // Delete confirmation
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   // Auto-grab notification
   const [autoGrabMessage, setAutoGrabMessage] = useState<string | null>(null);
@@ -193,19 +197,25 @@ export default function RequestsPage() {
   const searchProwlarr = async (gameName: string, platformName: string) => {
     setSearchLoading(true);
     setSearchResults([]);
+    setSearchError(null);
     try {
       const res = await fetch(
-        `/api/prowlarr?q=${encodeURIComponent(gameName)}&platform=${encodeURIComponent(platformName)}`
+        `/api/prowlarr?q=${encodeURIComponent(gameName)}&platform=${encodeURIComponent(platformName)}`,
+        { signal: AbortSignal.timeout(30000) }
       );
       if (res.ok) {
         const data = await res.json();
         setSearchResults(data);
       } else {
         const data = await res.json();
-        alert(data.error || "Prowlarr search failed");
+        setSearchError(data.error || "Prowlarr search failed");
       }
-    } catch {
-      alert("Failed to search Prowlarr");
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "TimeoutError") {
+        setSearchError("Prowlarr search timed out after 30 seconds. Check your Prowlarr connection.");
+      } else {
+        setSearchError("Failed to search Prowlarr. Check your connection.");
+      }
     } finally {
       setSearchLoading(false);
     }
@@ -652,8 +662,14 @@ export default function RequestsPage() {
                     <Button
                       size="icon"
                       variant="ghost"
-                      className="text-muted-foreground hover:text-destructive"
-                      onClick={() => deleteRequest(request.id)}
+                      className={cn(
+                        deletingId === request.id
+                          ? "text-destructive"
+                          : "text-muted-foreground hover:text-destructive"
+                      )}
+                      onClick={() =>
+                        setDeletingId(deletingId === request.id ? null : request.id)
+                      }
                       title="Delete"
                     >
                       <Trash2 className="h-4 w-4" />
@@ -668,6 +684,32 @@ export default function RequestsPage() {
                     <p className="text-sm text-muted-foreground">
                       <span className="font-medium">Admin note:</span> {request.adminNote}
                     </p>
+                  </div>
+                )}
+
+                {/* Delete confirmation */}
+                {deletingId === request.id && (
+                  <div className="mt-3 flex items-center gap-3 border-t pt-3">
+                    <AlertTriangle className="h-4 w-4 flex-shrink-0 text-destructive" />
+                    <span className="text-sm text-destructive">Delete this request?</span>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => {
+                        setDeletingId(null);
+                        deleteRequest(request.id);
+                      }}
+                    >
+                      <Trash2 className="mr-1 h-3 w-3" />
+                      Confirm
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setDeletingId(null)}
+                    >
+                      Cancel
+                    </Button>
                   </div>
                 )}
 
@@ -742,6 +784,11 @@ export default function RequestsPage() {
                       <div className="flex items-center justify-center py-6 text-muted-foreground">
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                         Searching indexers...
+                      </div>
+                    ) : searchError ? (
+                      <div className="flex items-center gap-2 py-4 text-sm text-destructive">
+                        <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                        <span>{searchError}</span>
                       </div>
                     ) : searchResults.length === 0 ? (
                       <div className="py-4 text-center text-sm text-muted-foreground">

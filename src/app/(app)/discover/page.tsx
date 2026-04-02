@@ -56,6 +56,28 @@ function DiscoverContent() {
     searchInputRef.current?.focus();
   }, []);
 
+  // Load existing requests to pre-populate "requested" state
+  useEffect(() => {
+    fetch("/api/requests")
+      .then((r) => r.json())
+      .then((data: { game: { igdbId?: number; platform: { slug: string } } }[]) => {
+        const keys = new Set<string>();
+        data.forEach((req) => {
+          if (req.game.igdbId) {
+            keys.add(`${req.game.igdbId}-${req.game.platform.slug}`);
+          }
+        });
+        if (keys.size > 0) {
+          setRequested((prev) => {
+            const merged = new Set(prev);
+            keys.forEach((k) => merged.add(k));
+            return merged;
+          });
+        }
+      })
+      .catch(() => {}); // silently fail — non-critical
+  }, []);
+
   // Update URL params when search/filter changes
   const updateUrl = useCallback(
     (q: string, platform: string | null) => {
