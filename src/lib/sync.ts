@@ -236,7 +236,13 @@ export async function syncAndRetryDownloads(
           logger.log(`[Sync] SABnzbd history for ${dl.nzbId}: status="${hs.status}", fail_message="${hs.fail_message || ""}"`);
         }
 
-        const isFailed = hs && hs.status !== "Completed" && !qMap.has(dl.nzbId);
+        // SABnzbd history statuses that do NOT indicate failure — newly-added NZBs
+        // can appear in history with status "Queued" before they start downloading.
+        const SAB_NON_FAILED_STATUSES = new Set([
+          "Completed", "Queued", "Downloading", "Fetching",
+          "Verifying", "Repairing", "Extracting", "Moving", "Running",
+        ]);
+        const isFailed = hs && !SAB_NON_FAILED_STATUSES.has(hs.status) && !qMap.has(dl.nzbId);
         if (isFailed && hs) {
           downloadUpdates.push({ id: dl.id, data: { status: "FAILED", error: hs.fail_message || hs.status } });
           dl.status = "FAILED";

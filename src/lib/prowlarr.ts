@@ -284,12 +284,30 @@ export function hasPlatformMismatch(title: string, platformName?: string): boole
 // Words/patterns that, when following a game name, indicate a sequel or spin-off
 const SEQUEL_INDICATORS = /^(\s+)(returns|reloaded|revolution|remix|remastered|remake|advance|adventures?|origins?|legends?|saga|chronicles?|collection|trilogy|anthology|plus|deluxe|hd|ii|iii|iv|v|vi|vii|viii|ix|xl?|dx|\d+)\b/i;
 
-/** Check if the text after a game name match indicates a different game (sequel/spin-off) */
+// Words that should be ignored when counting significant words after a game name match.
+// Platform abbreviations, region codes, ROM suffixes, and common noise words.
+const NOISE_WORD = /^(the|and|or|of|in|on|at|for|to|a|an|by|vs|rom|usa|eur|pal|ntsc|europe|jpn|japan|eng|en|fr|de|es|it|nl|pt|se|dk|no|fi|ru|gba|gbc|nds|n64|nes|snes|sfc|ngc|gcn|psx|ps[0-9]+|psp|vita|wii|wiu|gb|nsp|xci|nsz|3ds|zip|7z|rar|iso|bin|nfo|sfv|md5|multi[0-9]*|disc[0-9]*|disk[0-9]*|cd[0-9]*|v[0-9]+|rev[0-9]*|[0-9]+)$/i;
+
+/** Check if the text after a game name match indicates a different game (sequel/spin-off/subtitle) */
 function isSequelMatch(title: string, matchEnd: number): boolean {
   const after = title.substring(matchEnd);
-  // If nothing follows or only tags/platform info follows, it's a valid match
+  // If nothing follows or only whitespace, it's a valid match
   if (!after.trim()) return false;
-  return SEQUEL_INDICATORS.test(after);
+
+  // Check known sequel/variant indicators first (fast path)
+  if (SEQUEL_INDICATORS.test(after)) return true;
+
+  // Count significant non-noise words that appear before the first bracket or paren.
+  // If 2+ meaningful words follow the game name (e.g. "Dark Conflict", "Days of Ruin",
+  // "Dual Strike"), this is almost certainly a different game with its own subtitle.
+  const beforeBracket = after.split(/[([]/)[0];
+  const words = beforeBracket
+    .trim()
+    .split(/\s+/)
+    .filter((w) => w.length >= 3 && !NOISE_WORD.test(w));
+  if (words.length >= 2) return true;
+
+  return false;
 }
 
 /** Find where a name appears in a title, checking it's not a sequel */
@@ -467,16 +485,35 @@ export class ProwlarrClient {
     const simple = clean.replace(/\s*(Version|Edition|Special)\s*/gi, " ").replace(/\s+/g, " ").trim();
     const ascii = stripAccents(simple || clean);
 
-    // Get short platform abbreviation for better search results
+    // Get short platform abbreviation for better search results.
+    // Prefer the abbreviation (e.g. "gba") over the full name ("Game Boy Advance") —
+    // indexers typically tag releases with short abbreviations and the full name
+    // bloats the query enough to return 0 results on most indexers.
     const platAbbrev = platform ? (PLATFORM_KEYWORDS[platform.toLowerCase()]?.[0] || platform) : undefined;
+    const useAbbrev = platAbbrev && platAbbrev !== platform;
 
+    // 1. User-configured template (highest priority)
     if (template) q.push(template.replace("{game_name}", name).replace("{platform}", platform || "").trim());
-    if (platform) q.push(`${name} ${platform}`);
-    if (platAbbrev && platAbbrev !== platform) q.push(`${name} ${platAbbrev}`);
+    // 2. Name + abbreviated platform (e.g. "Advance Wars gba") — best balance of specificity
+    if (useAbbrev) q.push(`${name} ${platAbbrev}`);
+    // 3. Bare name — broadest query; platform mismatch filter handles wrong-platform results
     q.push(name);
-    if (clean !== name) { if (platform) q.push(`${clean} ${platform}`); if (platAbbrev && platAbbrev !== platform) q.push(`${clean} ${platAbbrev}`); q.push(clean); }
-    if (simple !== clean) { if (platform) q.push(`${simple} ${platform}`); q.push(simple); }
-    if (ascii !== (simple || clean)) { if (platform) q.push(`${ascii} ${platform}`); q.push(ascii); }
+    // 4. Full platform name variant (long, often returns 0 results, kept as last resort)
+    if (platform && !useAbbrev) q.push(`${name} ${platform}`);
+
+    // Simplified name variants (strip subtitle after colon, strip Edition/Version/Special)
+    if (clean !== name) {
+      if (useAbbrev) q.push(`${clean} ${platAbbrev}`);
+      q.push(clean);
+    }
+    if (simple !== clean) {
+      if (useAbbrev) q.push(`${simple} ${platAbbrev}`);
+      q.push(simple);
+    }
+    if (ascii !== (simple || clean)) {
+      if (useAbbrev) q.push(`${ascii} ${platAbbrev}`);
+      q.push(ascii);
+    }
 
     return Array.from(new Set(q));
   }
