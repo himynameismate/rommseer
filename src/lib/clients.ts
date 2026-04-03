@@ -54,7 +54,11 @@ export async function getCachedRomMClient(): Promise<RomMClient | null> {
   if (rommCache && Date.now() < rommCache.expiresAt) return rommCache.instance;
   const settings = await getCachedSettings();
   const instance = settings?.rommUrl
-    ? new RomMClient(settings.rommUrl, settings.rommUsername, settings.rommPassword)
+    ? new RomMClient(settings.rommUrl, {
+        apiKey: settings.rommApiKey || undefined,
+        username: settings.rommUsername || undefined,
+        password: settings.rommPassword || undefined,
+      })
     : null;
   rommCache = { instance, expiresAt: Date.now() + CACHE_TTL };
   return instance;

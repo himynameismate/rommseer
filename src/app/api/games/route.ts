@@ -31,10 +31,12 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // Check if game already exists
+  // Check if this exact game+platform combination already exists.
+  // Uses the @@unique([igdbId, platformId]) composite constraint so
+  // Advance Wars GBA and Advance Wars Switch are separate rows.
   if (igdbId) {
     const existing = await prisma.game.findUnique({
-      where: { igdbId },
+      where: { igdbId_platformId: { igdbId, platformId: platform.id } },
     });
     if (existing) {
       return NextResponse.json(existing);

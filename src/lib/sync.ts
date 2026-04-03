@@ -124,15 +124,21 @@ async function syncRomMLibrary(): Promise<void> {
         // Match roms against local games by igdbId or name
         for (const rom of roms) {
           if (rom.igdb_id) {
+            // Match by (igdbId + platformSlug) so Advance Wars GBA and Switch
+            // are treated as separate library entries.
             const updated = await prisma.game.updateMany({
-              where: { igdbId: rom.igdb_id, isAvailable: false },
+              where: {
+                igdbId: rom.igdb_id,
+                isAvailable: false,
+                platform: { slug: platform.slug },
+              },
               data: { isAvailable: true, rommId: rom.id },
             });
             totalUpdated += updated.count;
           } else {
-            // Fallback: match by name (case-insensitive via lowercase comparison)
+            // Fallback: match by name + platform (case-insensitive)
             const games = await prisma.game.findMany({
-              where: { isAvailable: false },
+              where: { isAvailable: false, platform: { slug: platform.slug } },
               select: { id: true, name: true },
             });
             for (const game of games) {

@@ -19,10 +19,11 @@ interface SearchResult {
   coverUrl: string | null;
   releaseDate: string | null;
   rating: number | null;
-  platforms: { id: number; name: string; slug: string }[];
-  dbId: number | null;
-  isAvailable: boolean;
-  requestCount: number;
+  // Each platform carries its own availability — same game can be in library on
+  // one platform but not another (e.g. Advance Wars Switch vs GBA)
+  platforms: { id: number; name: string; slug: string; isAvailable: boolean; requestCount: number }[];
+  isAvailable: boolean;  // true if ANY platform version is in library (card badge)
+  requestCount: number;  // total across all platforms
 }
 
 function DiscoverContent() {
@@ -311,9 +312,9 @@ function DiscoverContent() {
                 })
               : result.platforms;
 
-            // Count unrequested platforms for multi-platform button
+            // Count platforms still requestable (not already requested AND not already in library)
             const unrequestedPlatforms = result.platforms.filter(
-              (p) => !requested.has(`${result.igdbId}-${p.slug}`)
+              (p) => !requested.has(`${result.igdbId}-${p.slug}`) && !p.isAvailable
             );
             const allRequested = unrequestedPlatforms.length === 0;
 
@@ -387,36 +388,37 @@ function DiscoverContent() {
                     </p>
                   )}
 
-                  {/* Platform picker or single-platform request button */}
-                  {result.isAvailable ? (
-                    <Button className="w-full" size="sm" disabled>
-                      <Check className="mr-2 h-4 w-4" />
-                      In Library
-                    </Button>
-                  ) : pickingPlatform === result.igdbId ? (
+                  {/* Platform picker or single-platform request button.
+                      Each platform is independently requestable — a game in the
+                      library on Switch should not block requesting it on GBA. */}
+                  {pickingPlatform === result.igdbId ? (
                     <div className="space-y-1.5">
                       <p className="text-xs text-muted-foreground text-center">Select platform:</p>
                       {sortedPlatforms.map((p) => {
                         const key = `${result.igdbId}-${p.slug}`;
                         const done = requested.has(key);
                         const loading = requesting === key;
+                        const available = p.isAvailable;
                         return (
                           <Button
                             key={p.slug}
                             className="w-full justify-start"
                             size="sm"
-                            variant={done ? "secondary" : "outline"}
-                            disabled={done || loading}
+                            variant={done || available ? "secondary" : "outline"}
+                            disabled={done || loading || available}
                             onClick={() => handleRequest(result, p)}
                           >
                             {loading ? (
                               <Loader2 className="mr-2 h-3 w-3 animate-spin" />
-                            ) : done ? (
+                            ) : done || available ? (
                               <Check className="mr-2 h-3 w-3" />
                             ) : (
                               <Plus className="mr-2 h-3 w-3" />
                             )}
                             <span className="truncate">{p.name}</span>
+                            {available && (
+                              <span className="ml-auto text-[10px] text-green-500">In Library</span>
+                            )}
                           </Button>
                         );
                       })}
@@ -431,26 +433,32 @@ function DiscoverContent() {
                       </Button>
                     </div>
                   ) : result.platforms.length === 1 ? (
-                    <Button
-                      className="w-full"
-                      size="sm"
-                      disabled={requested.has(`${result.igdbId}-${result.platforms[0].slug}`) || requesting === `${result.igdbId}-${result.platforms[0].slug}`}
-                      onClick={() => handleRequest(result, result.platforms[0])}
-                    >
-                      {requested.has(`${result.igdbId}-${result.platforms[0].slug}`) ? (
-                        <>
-                          <Check className="mr-2 h-4 w-4" />
-                          Requested
-                        </>
-                      ) : requesting === `${result.igdbId}-${result.platforms[0].slug}` ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <>
-                          <Plus className="mr-2 h-4 w-4" />
-                          Request
-                        </>
-                      )}
-                    </Button>
+                    // Single-platform game
+                    (() => {
+                      const p = result.platforms[0];
+                      const key = `${result.igdbId}-${p.slug}`;
+                      const done = requested.has(key);
+                      const loading = requesting === key;
+                      const available = p.isAvailable;
+                      return (
+                        <Button
+                          className="w-full"
+                          size="sm"
+                          disabled={done || loading || available}
+                          onClick={() => handleRequest(result, p)}
+                        >
+                          {available ? (
+                            <><Check className="mr-2 h-4 w-4" />In Library</>
+                          ) : done ? (
+                            <><Check className="mr-2 h-4 w-4" />Requested</>
+                          ) : loading ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <><Plus className="mr-2 h-4 w-4" />Request</>
+                          )}
+                        </Button>
+                      );
+                    })()
                   ) : allRequested ? (
                     <Button className="w-full" size="sm" disabled>
                       <Check className="mr-2 h-4 w-4" />

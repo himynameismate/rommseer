@@ -26,37 +26,46 @@ interface RomMRom {
   url_cover: string;
 }
 
-interface TokenResponse {
-  access_token: string;
-  refresh_token: string;
-  token_type: string;
-}
-
-const TOKEN_REFRESH_BUFFER_MS = 60_000; // Refresh 1 minute before expiry
-const ACCESS_TOKEN_LIFETIME_MS = 15 * 60 * 1000; // 15 minutes
-
 /**
- * RomM API client using OAuth2 bearer token authentication.
+ * RomM API client supporting two authentication modes:
  *
- * Authenticates via POST /api/token with username/password to obtain
- * an access_token (15 min) and refresh_token (2 weeks). All subsequent
- * requests use Authorization: Bearer <access_token>.
+ * 1. **API Key (preferred)**: RomM 4.8.0+ client tokens with `rmm_` prefix.
+ *    Sent directly as `Authorization: Bearer rmm_<token>`. No OAuth flow needed.
+ *
+ * 2. **Username/Password (legacy fallback)**: OAuth2 password grant via
+ *    POST /api/token. Used only when no API key is provided.
  */
 export class RomMClient {
   private baseUrl: string;
+  private apiKey: string | null;
   private username: string;
   private password: string;
   private accessToken: string | null = null;
   private refreshToken: string | null = null;
   private tokenExpiresAt: number = 0;
 
-  constructor(baseUrl: string, username: string, password: string) {
+  private static readonly TOKEN_REFRESH_BUFFER_MS = 60_000;
+  private static readonly ACCESS_TOKEN_LIFETIME_MS = 15 * 60 * 1000;
+
+  constructor(baseUrl: string, options: { apiKey?: string; username?: string; password?: string } = {}) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
-    this.username = username;
-    this.password = password;
+    this.apiKey = options.apiKey || null;
+    this.username = options.username || "";
+    this.password = options.password || "";
   }
 
-  /** Obtain a new access token using username/password. */
+  /** Whether this client uses a static API key (no token refresh needed). */
+  private get usesApiKey(): boolean {
+    return !!this.apiKey;
+  }
+
+  /** Get the bearer token to use for requests. */
+  private getBearerToken(): string | null {
+    if (this.usesApiKey) return this.apiKey;
+    return this.accessToken;
+  }
+
+  /** Obtain a new access token using username/password (OAuth2 password grant). */
   private async authenticate(): Promise<void> {
     const scopes = [
       "me.read",
@@ -86,10 +95,16 @@ export class RomMClient {
       );
     }
 
+    interface TokenResponse {
+      access_token: string;
+      refresh_token: string;
+      token_type: string;
+    }
+
     const data: TokenResponse = await response.json();
     this.accessToken = data.access_token;
     this.refreshToken = data.refresh_token;
-    this.tokenExpiresAt = Date.now() + ACCESS_TOKEN_LIFETIME_MS;
+    this.tokenExpiresAt = Date.now() + RomMClient.ACCESS_TOKEN_LIFETIME_MS;
     logger.log("[RomM] Authenticated via OAuth2 token");
   }
 
@@ -114,10 +129,16 @@ export class RomMClient {
         return false;
       }
 
+      interface TokenResponse {
+        access_token: string;
+        refresh_token: string;
+        token_type: string;
+      }
+
       const data: TokenResponse = await response.json();
       this.accessToken = data.access_token;
       this.refreshToken = data.refresh_token;
-      this.tokenExpiresAt = Date.now() + ACCESS_TOKEN_LIFETIME_MS;
+      this.tokenExpiresAt = Date.now() + RomMClient.ACCESS_TOKEN_LIFETIME_MS;
       logger.log("[RomM] Token refreshed via refresh_token");
       return true;
     } catch {
@@ -125,10 +146,13 @@ export class RomMClient {
     }
   }
 
-  /** Ensure we have a valid access token, refreshing or re-authenticating as needed. */
+  /** Ensure we have a valid bearer token. API key mode is always valid; OAuth mode refreshes as needed. */
   private async ensureToken(): Promise<void> {
-    // Token still valid
-    if (this.accessToken && Date.now() < this.tokenExpiresAt - TOKEN_REFRESH_BUFFER_MS) {
+    // API key mode — always valid, no refresh needed
+    if (this.usesApiKey) return;
+
+    // OAuth: token still valid
+    if (this.accessToken && Date.now() < this.tokenExpiresAt - RomMClient.TOKEN_REFRESH_BUFFER_MS) {
       return;
     }
 
@@ -148,7 +172,7 @@ export class RomMClient {
     const url = `${this.baseUrl}/api${endpoint}`;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${this.accessToken}`,
+      Authorization: `Bearer ${this.getBearerToken()}`,
     };
 
     const response = await fetch(url, {
@@ -156,8 +180,8 @@ export class RomMClient {
       headers: { ...headers, ...((options?.headers as Record<string, string>) || {}) },
     });
 
-    // On 401, try re-authenticating once
-    if (response.status === 401) {
+    // On 401, try re-authenticating once (only for OAuth mode)
+    if (response.status === 401 && !this.usesApiKey) {
       this.accessToken = null;
       this.refreshToken = null;
       this.tokenExpiresAt = 0;
@@ -167,7 +191,7 @@ export class RomMClient {
         ...options,
         headers: {
           ...headers,
-          Authorization: `Bearer ${this.accessToken}`,
+          Authorization: `Bearer ${this.getBearerToken()}`,
           ...((options?.headers as Record<string, string>) || {}),
         },
       });
@@ -231,7 +255,7 @@ export class RomMClient {
         path: "/ws/socket.io/",
         transports: ["polling", "websocket"],
         extraHeaders: {
-          Authorization: `Bearer ${this.accessToken}`,
+          Authorization: `Bearer ${this.getBearerToken()}`,
         },
         withCredentials: true,
         timeout: 10_000,
@@ -294,5 +318,9 @@ export class RomMClient {
 export async function getRomMClient(): Promise<RomMClient | null> {
   const settings = await prisma.settings.findUnique({ where: { id: 1 } });
   if (!settings?.rommUrl) return null;
-  return new RomMClient(settings.rommUrl, settings.rommUsername, settings.rommPassword);
+  return new RomMClient(settings.rommUrl, {
+    apiKey: settings.rommApiKey || undefined,
+    username: settings.rommUsername || undefined,
+    password: settings.rommPassword || undefined,
+  });
 }

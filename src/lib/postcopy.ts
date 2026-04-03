@@ -182,6 +182,7 @@ export function copyAndScan(requestId: number, downloadId: number): void {
         userName: req.user?.name || "System",
         coverUrl: req.game.coverUrl,
         userId: req.userId,
+        requestId: requestId,
       });
 
       const romm = await getCachedRomMClient();

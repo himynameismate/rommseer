@@ -185,7 +185,7 @@ export async function POST(req: NextRequest) {
   });
   notify({
     event: "REQUEST_CREATED", gameName: request.game.name, platformName: request.game.platform.name,
-    userName, coverUrl: request.game.coverUrl, userId: session.user.id,
+    userName, coverUrl: request.game.coverUrl, userId: session.user.id, requestId: request.id,
   });
 
   // If auto-approved and auto-grab is enabled, trigger auto-grab in the background

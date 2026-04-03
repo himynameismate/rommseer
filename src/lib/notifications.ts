@@ -25,6 +25,7 @@ interface NotifyPayload {
   error?: string | null;
   extra?: string;
   userId?: string;
+  requestId?: number; // For deep-link in notification
 }
 
 const EVENT_COLORS: Record<NotifyEvent, number> = {
@@ -141,7 +142,9 @@ export async function notify(payload: NotifyPayload): Promise<void> {
       };
       const notifType = typeMap[payload.event] || payload.event;
       const notifMessage = `${EVENT_TITLES[payload.event]}: ${payload.gameName} (${payload.platformName})`;
-      await createNotification(payload.userId, notifType, notifMessage, "/requests");
+      // Link to the specific request if we have its ID, otherwise the requests list
+      const link = payload.requestId ? `/requests?highlight=${payload.requestId}` : "/requests";
+      await createNotification(payload.userId, notifType, notifMessage, link);
     }
   } catch (e) {
     logger.error(`[Notify] Error:`, e instanceof Error ? e.message : e);

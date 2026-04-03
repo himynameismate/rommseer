@@ -26,6 +26,7 @@ import {
 
 interface SettingsData {
   rommUrl: string;
+  rommApiKey: string;
   rommUsername: string;
   rommPassword: string;
   igdbClientId: string;
@@ -109,6 +110,7 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<TabKey>("general");
   const [settings, setSettings] = useState<SettingsData>({
     rommUrl: "",
+    rommApiKey: "",
     rommUsername: "",
     rommPassword: "",
     igdbClientId: "",
@@ -164,6 +166,7 @@ export default function SettingsPage() {
       .then((data) => {
         setSettings({
           rommUrl: data.rommUrl ?? "",
+          rommApiKey: data.rommApiKey ?? "",
           rommUsername: data.rommUsername ?? "",
           rommPassword: data.rommPassword ?? "",
           igdbClientId: data.igdbClientId ?? "",
@@ -218,6 +221,7 @@ export default function SettingsPage() {
         const data = await res.json();
         setSettings({
           rommUrl: data.rommUrl,
+          rommApiKey: data.rommApiKey,
           rommUsername: data.rommUsername,
           rommPassword: data.rommPassword,
           igdbClientId: data.igdbClientId,
@@ -426,11 +430,11 @@ export default function SettingsPage() {
                   <div>
                     <h2 className="text-lg font-semibold">RomM Connection</h2>
                     <p className="text-sm text-muted-foreground">
-                      Connect to your RomM instance via its REST API (OAuth2 token auth)
+                      Connect to your RomM instance using a client API key (RomM 4.8.0+)
                     </p>
                   </div>
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div className="space-y-2 sm:col-span-2">
+                  <div className="space-y-4">
+                    <div className="space-y-2">
                       <label className="text-sm font-medium">RomM URL</label>
                       <Input
                         placeholder="http://localhost:8080"
@@ -441,25 +445,19 @@ export default function SettingsPage() {
                       />
                     </div>
                     <div className="space-y-2">
-                      <label className="text-sm font-medium">Username</label>
-                      <Input
-                        placeholder="Your RomM username"
-                        value={settings.rommUsername}
-                        onChange={(e) =>
-                          setSettings((s) => ({ ...s, rommUsername: e.target.value }))
-                        }
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium">Password</label>
+                      <label className="text-sm font-medium">API Key</label>
                       <Input
                         type="password"
-                        placeholder="Your RomM password"
-                        value={settings.rommPassword}
+                        placeholder="rmm_..."
+                        value={settings.rommApiKey}
                         onChange={(e) =>
-                          setSettings((s) => ({ ...s, rommPassword: e.target.value }))
+                          setSettings((s) => ({ ...s, rommApiKey: e.target.value }))
                         }
                       />
+                      <p className="text-xs text-muted-foreground">
+                        Create a client token in RomM under Administration &rarr; API Keys.
+                        Requires scopes: me.read, roms.read, platforms.read, assets.read, tasks.run.
+                      </p>
                     </div>
                   </div>
                   <div className="space-y-2">

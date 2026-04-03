@@ -19,6 +19,7 @@ export async function GET() {
   if (!settings) {
     return NextResponse.json({
       rommUrl: "",
+      rommApiKey: "",
       rommUsername: "",
       rommPassword: "",
       igdbClientId: "",
@@ -76,6 +77,7 @@ export async function PUT(req: NextRequest) {
 
   const {
     rommUrl,
+    rommApiKey,
     rommUsername,
     rommPassword,
     igdbClientId,
@@ -198,7 +200,7 @@ export async function PUT(req: NextRequest) {
     create: {
       id: 1,
       rommUrl: rommUrl ?? "",
-      rommApiKey: "",
+      rommApiKey: rommApiKey ?? "",
       rommUsername: rommUsername ?? "",
       rommPassword: rommPassword ?? "",
       igdbClientId: igdbClientId ?? "",
@@ -260,11 +262,11 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
-    const client = new RomMClient(
-      settings.rommUrl,
-      settings.rommUsername,
-      settings.rommPassword
-    );
+    const client = new RomMClient(settings.rommUrl, {
+      apiKey: settings.rommApiKey || undefined,
+      username: settings.rommUsername || undefined,
+      password: settings.rommPassword || undefined,
+    });
     const success = await client.testConnection();
     return NextResponse.json({ success });
   }

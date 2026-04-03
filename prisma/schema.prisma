@@ -38,7 +38,7 @@ model Platform {
 
 model Game {
   id          Int       @id @default(autoincrement())
-  igdbId      Int?      @unique
+  igdbId      Int?      // Not unique alone — same IGDB game can exist per platform
   name        String
   summary     String?
   coverUrl    String?
@@ -52,6 +52,7 @@ model Game {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
+  @@unique([igdbId, platformId]) // One Game row per (igdbGame, platform) pair
   @@index([platformId])
   @@index([name])
 }

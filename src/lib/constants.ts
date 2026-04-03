@@ -18,7 +18,7 @@ export const ROM_EXTENSIONS = new Set([
 ]);
 
 /** Fields masked with "********" in API responses. */
-export const SECRET_FIELDS = ["rommPassword", "igdbClientSecret", "qbitPassword", "prowlarrApiKey", "sabnzbdApiKey"] as const;
+export const SECRET_FIELDS = ["rommApiKey", "rommPassword", "igdbClientSecret", "qbitPassword", "prowlarrApiKey", "sabnzbdApiKey"] as const;
 
 /** Mask sensitive fields for API responses. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
