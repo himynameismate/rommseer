@@ -43,7 +43,9 @@ export async function GET() {
       sabnzbdApiKey: "",
       sabnzbdCategory: "rommseer",
       torrentEnabled: true,
+      usenetEnabled: true,
       archiveOrgEnabled: false,
+      downloadPriority: "torrent,usenet,ia",
       autoApprove: false,
       rommLibraryPath: "",
       discordWebhookUrl: "",
@@ -103,7 +105,9 @@ export async function PUT(req: NextRequest) {
     sabnzbdApiKey,
     sabnzbdCategory,
     torrentEnabled,
+    usenetEnabled,
     archiveOrgEnabled,
+    downloadPriority,
     autoApprove,
     rommLibraryPath,
     discordWebhookUrl,
@@ -177,7 +181,9 @@ export async function PUT(req: NextRequest) {
   if (stallDetectEnabled !== undefined) data.stallDetectEnabled = stallDetectEnabled;
   if (stallDetectMinutes !== undefined) data.stallDetectMinutes = Number(stallDetectMinutes);
   if (torrentEnabled !== undefined) data.torrentEnabled = torrentEnabled;
+  if (usenetEnabled !== undefined) data.usenetEnabled = usenetEnabled;
   if (archiveOrgEnabled !== undefined) data.archiveOrgEnabled = archiveOrgEnabled;
+  if (downloadPriority !== undefined) data.downloadPriority = downloadPriority;
 
   // SABnzbd
   if (sabnzbdUrl !== undefined) data.sabnzbdUrl = sabnzbdUrl;
@@ -230,7 +236,9 @@ export async function PUT(req: NextRequest) {
       sabnzbdApiKey: sabnzbdApiKey ?? "",
       sabnzbdCategory: sabnzbdCategory ?? "rommseer",
       torrentEnabled: torrentEnabled ?? true,
+      usenetEnabled: usenetEnabled ?? true,
       archiveOrgEnabled: archiveOrgEnabled ?? false,
+      downloadPriority: downloadPriority ?? "torrent,usenet,ia",
       autoApprove: autoApprove ?? false,
       rommLibraryPath: rommLibraryPath ?? "",
       discordWebhookUrl: discordWebhookUrl ?? "",

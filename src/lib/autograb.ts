@@ -81,15 +81,19 @@ async function _autoGrabForRequest(requestId: number): Promise<AutoGrabResult> {
     return { success: false, message: `Max retries reached (${request.downloads.length} downloads)` };
   }
 
-  const torrentEnabled = settings.torrentEnabled !== false; // default true
+  // Parse download priority order (default: torrent → usenet → ia)
+  const priority = (settings.downloadPriority || "torrent,usenet,ia")
+    .split(",").map((s) => s.trim()).filter(Boolean) as ("torrent" | "usenet" | "ia")[];
+  const torrentEnabled = settings.torrentEnabled !== false;
+  const usenetEnabled = settings.usenetEnabled !== false;
   const archiveOrgEnabled = settings.archiveOrgEnabled === true;
+
+  const anySourceEnabled = (torrentEnabled || usenetEnabled || archiveOrgEnabled);
+  if (!anySourceEnabled) return { success: false, message: "All download sources are disabled" };
 
   const [prowlarr, qbit, sabnzbd] = await Promise.all([
     getCachedProwlarrClient(), getCachedQBittorrentClient(), getCachedSABnzbdClient(),
   ]);
-  if (!prowlarr && !archiveOrgEnabled) return { success: false, message: "Prowlarr not configured and Internet Archive disabled" };
-  const hasDownloadClient = (torrentEnabled && qbit) || sabnzbd;
-  if (!hasDownloadClient && !archiveOrgEnabled) return { success: false, message: "No download client configured" };
 
   try {
     // Exclude previously failed titles (normalized to catch minor punctuation differences)
@@ -98,153 +102,144 @@ async function _autoGrabForRequest(requestId: number): Promise<AutoGrabResult> {
     const failedTitles = new Set(failed.map((d) => normTitle(d.torrentName || "")).filter(Boolean));
     if (failedTitles.size) logger.log(`[AutoGrab] Excluding ${failedTitles.size} previously failed results`);
 
-    let prowlarrFailed = false;
+    // ── Prowlarr search (fetch once, bucket by protocol) ────────────
+    let torrentResults: ProwlarrRelease[] = [];
+    let usenetResults: ProwlarrRelease[] = [];
+    const skipFailing = settings.prowlarrSkipFailingIndexers !== false;
 
-    // ── Prowlarr search ──────────────────────────────────────────────
     if (prowlarr) {
-    const allResults = await prowlarr.searchForRom(
-      request.game.name, request.game.platform.name,
-      settings.prowlarrSearchTemplate || undefined, settings.prowlarrMinSeeders, settings.prowlarrMaxSizeMb,
-    );
-    let results = allResults.filter((r) => !failedTitles.has(normTitle(r.title)));
-
-    // Filter out torrents when torrent downloads are disabled
-    if (!torrentEnabled) {
-      const before = results.length;
-      results = results.filter((r) => r.protocol === "usenet");
-      if (before > results.length) {
-        logger.log(`[AutoGrab] Filtered out ${before - results.length} torrent results (torrents disabled)`);
-      }
-    }
-
-    if (results.length > 0) {
-    // Boost preferred indexers
-    if (settings.prowlarrPreferredIndexers) {
-      const pref = settings.prowlarrPreferredIndexers.split(",").map((s: string) => s.trim().toLowerCase()).filter(Boolean);
-      if (pref.length) results.sort((a, b) => +pref.includes(b.indexer.toLowerCase()) - +pref.includes(a.indexer.toLowerCase()));
-    }
-
-    // Filter out results from blocked indexers (if enabled)
-    const skipFailing = settings.prowlarrSkipFailingIndexers !== false; // default true
-    let viable = results;
-    if (skipFailing) {
-      const blockedStatuses = await Promise.all(results.map((r) => isIndexerBlocked(r.indexer)));
-      const blocked = results.filter((_, i) => blockedStatuses[i]);
-      viable = results.filter((_, i) => !blockedStatuses[i]);
-      if (blocked.length) {
-        const blockedIndexerNames = Array.from(new Set(blocked.map((r) => r.indexer))).join(", ");
-        logger.log(`[AutoGrab] Skipping ${blocked.length} results from blocked indexers: ${blockedIndexerNames}`);
-      }
-    }
-
-    if (viable.length > 0) {
-    // Dry-run mode: log results without downloading
-    if (settings.prowlarrDryRun) {
-      const top = viable.slice(0, 5);
-      for (const r of top) {
-        logger.log(`[DRY RUN] Would grab: "${r.title}" (${r.protocol}, ${r.indexer}, seeders: ${r.seeders ?? "n/a"})`);
-      }
-      const best = top[0];
-      return { success: true, message: `[DRY RUN] Would grab: "${best.title}" from ${best.indexer} (${viable.length} viable results)`, torrentTitle: best.title, indexer: best.indexer };
-    }
-
-    // Try up to 5 results
-    let lastErr = "";
-    let tried = 0;
-    for (let i = 0; i < viable.length && tried < 5; i++) {
-      const r = viable[i];
-      tried++;
-      logger.log(`[AutoGrab] Try ${tried}: "${r.title}" (${r.protocol}, ${r.indexer}) [magnet:${!!r.magnetUrl}, hash:${!!r.infoHash}, url:${!!r.downloadUrl}]`);
-      try {
-        let result: AutoGrabResult;
-        if (r.protocol === "usenet") {
-          if (!sabnzbd) { lastErr = "SABnzbd not configured"; continue; }
-          result = await grabUsenet(prowlarr, sabnzbd, r, requestId, settings.sabnzbdCategory, request.game.name);
-        } else {
-          if (!torrentEnabled) { lastErr = "Torrent downloads disabled"; continue; }
-          if (!qbit) { lastErr = "qBittorrent not configured"; continue; }
-          result = await grabTorrent(prowlarr, qbit, r, requestId, settings, request.game.name);
-        }
-        if (skipFailing) await recordIndexerSuccess(r.indexer);
-        return result;
-      } catch (e) {
-        lastErr = e instanceof Error ? e.message : "Download failed";
-        logger.log(`[AutoGrab] Result ${tried} failed: ${lastErr}`);
-        if (skipFailing) await recordIndexerFailure(r.indexer);
-        // If request was deleted mid-grab, stop immediately
-        if (lastErr.includes("no longer exists") || lastErr.includes("Foreign key")) {
-          return { success: false, message: "Request was deleted" };
-        }
-      }
-    }
-    prowlarrFailed = true;
-    logger.log(`[AutoGrab] All Prowlarr results failed, last error: ${lastErr}`);
-    } else {
-      prowlarrFailed = true;
-    }
-    } else {
-      prowlarrFailed = true;
-      const msg = failedTitles.size ? `No new Prowlarr results (${failedTitles.size} failed excluded)` : `No Prowlarr results for "${request.game.name}"`;
-      logger.log(`[AutoGrab] ${msg}`);
-    }
-    } else {
-      prowlarrFailed = true;
-    }
-
-    // ── Internet Archive fallback ────────────────────────────────────
-    if (prowlarrFailed && archiveOrgEnabled) {
-      logger.log(`[AutoGrab] Trying Internet Archive for "${request.game.name}" (${request.game.platform.name})`);
-
-      if (settings.prowlarrDryRun) {
-        logger.log(`[DRY RUN] Would search Internet Archive for "${request.game.name}" (${request.game.platform.name})`);
-        return { success: true, message: `[DRY RUN] Would try Internet Archive for "${request.game.name}"` };
-      }
-
-      const iaResult = await searchAndDownloadFromIA(
-        request.game.name,
-        request.game.platform.name,
-        settings.prowlarrMaxSizeMb,
+      const allResults = await prowlarr.searchForRom(
+        request.game.name, request.game.platform.name,
+        settings.prowlarrSearchTemplate || undefined, settings.prowlarrMinSeeders, settings.prowlarrMaxSizeMb,
       );
+      let results = allResults.filter((r) => !failedTitles.has(normTitle(r.title)));
 
-      if (iaResult) {
-        // Create download record for the direct download
-        await prisma.download.create({
-          data: {
-            requestId,
-            downloadType: "direct",
-            torrentName: iaResult.result.fileName,
-            magnetUrl: iaResult.result.filePath, // store local path for postcopy
-            indexer: "Internet Archive",
-            status: "COMPLETED",
-            progress: 100,
-          },
-        });
-        await prisma.request.update({ where: { id: requestId }, data: { status: "DOWNLOADING" } });
-
-        // File is already downloaded — trigger copy immediately
-        const dl = await prisma.download.findFirst({
-          where: { requestId, downloadType: "direct", status: "COMPLETED" },
-          orderBy: { createdAt: "desc" },
-        });
-        if (dl) {
-          copyAndScan(requestId, dl.id);
+      // Apply indexer blocking
+      if (skipFailing) {
+        const blockedStatuses = await Promise.all(results.map((r) => isIndexerBlocked(r.indexer)));
+        const blocked = results.filter((_, i) => blockedStatuses[i]);
+        results = results.filter((_, i) => !blockedStatuses[i]);
+        if (blocked.length) {
+          logger.log(`[AutoGrab] Skipping ${blocked.length} results from blocked indexers: ${Array.from(new Set(blocked.map((r) => r.indexer))).join(", ")}`);
         }
-
-        return {
-          success: true,
-          message: `Downloaded "${iaResult.result.fileName}" from Internet Archive (${iaResult.itemTitle})`,
-          torrentTitle: iaResult.result.fileName,
-          indexer: "Internet Archive",
-        };
       }
 
-      logger.log(`[AutoGrab] Internet Archive had no suitable results for "${request.game.name}"`);
+      // Boost preferred indexers
+      if (settings.prowlarrPreferredIndexers) {
+        const pref = settings.prowlarrPreferredIndexers.split(",").map((s: string) => s.trim().toLowerCase()).filter(Boolean);
+        if (pref.length) results.sort((a, b) => +pref.includes(b.indexer.toLowerCase()) - +pref.includes(a.indexer.toLowerCase()));
+      }
+
+      // Dry-run: log and return early
+      if (settings.prowlarrDryRun && results.length > 0) {
+        const top = results.slice(0, 5);
+        for (const r of top) {
+          logger.log(`[DRY RUN] Would grab: "${r.title}" (${r.protocol}, ${r.indexer}, seeders: ${r.seeders ?? "n/a"})`);
+        }
+        const best = top[0];
+        return { success: true, message: `[DRY RUN] Would grab: "${best.title}" from ${best.indexer} (${results.length} results)`, torrentTitle: best.title, indexer: best.indexer };
+      }
+
+      torrentResults = results.filter((r) => r.protocol !== "usenet");
+      usenetResults = results.filter((r) => r.protocol === "usenet");
+      logger.log(`[AutoGrab] Prowlarr: ${torrentResults.length} torrent + ${usenetResults.length} usenet results`);
+    } else {
+      logger.log(`[AutoGrab] Prowlarr not configured`);
     }
 
-    if (!prowlarr && !archiveOrgEnabled) {
-      return { success: false, message: "No search sources configured" };
+    if (settings.prowlarrDryRun && archiveOrgEnabled) {
+      logger.log(`[DRY RUN] Would also try Internet Archive for "${request.game.name}"`);
+      return { success: true, message: `[DRY RUN] Would try Internet Archive for "${request.game.name}"` };
     }
-    return { success: false, message: `No results from any source for "${request.game.name}"` };
+
+    // ── Try sources in priority order ────────────────────────────────
+    logger.log(`[AutoGrab] Priority order: ${priority.join(" → ")}`);
+
+    for (const source of priority) {
+      if (source === "torrent") {
+        if (!torrentEnabled) { logger.log(`[AutoGrab] Skipping torrent (disabled)`); continue; }
+        if (!qbit) { logger.log(`[AutoGrab] Skipping torrent (qBittorrent not configured)`); continue; }
+        if (torrentResults.length === 0) { logger.log(`[AutoGrab] Skipping torrent (no results)`); continue; }
+
+        logger.log(`[AutoGrab] Trying ${torrentResults.length} torrent result(s)...`);
+        for (let i = 0; i < torrentResults.length && i < 5; i++) {
+          const r = torrentResults[i];
+          logger.log(`[AutoGrab] Torrent try ${i + 1}: "${r.title}" (${r.indexer})`);
+          try {
+            const result = await grabTorrent(prowlarr!, qbit, r, requestId, settings, request.game.name);
+            if (skipFailing) await recordIndexerSuccess(r.indexer);
+            return result;
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : "Failed";
+            logger.log(`[AutoGrab] Torrent ${i + 1} failed: ${msg}`);
+            if (skipFailing) await recordIndexerFailure(r.indexer);
+            if (msg.includes("no longer exists") || msg.includes("Foreign key")) {
+              return { success: false, message: "Request was deleted" };
+            }
+          }
+        }
+        logger.log(`[AutoGrab] All torrent results failed, trying next source`);
+
+      } else if (source === "usenet") {
+        if (!usenetEnabled) { logger.log(`[AutoGrab] Skipping usenet (disabled)`); continue; }
+        if (!sabnzbd) { logger.log(`[AutoGrab] Skipping usenet (SABnzbd not configured)`); continue; }
+        if (usenetResults.length === 0) { logger.log(`[AutoGrab] Skipping usenet (no results)`); continue; }
+
+        logger.log(`[AutoGrab] Trying ${usenetResults.length} usenet result(s)...`);
+        for (let i = 0; i < usenetResults.length && i < 5; i++) {
+          const r = usenetResults[i];
+          logger.log(`[AutoGrab] Usenet try ${i + 1}: "${r.title}" (${r.indexer})`);
+          try {
+            const result = await grabUsenet(prowlarr!, sabnzbd, r, requestId, settings.sabnzbdCategory, request.game.name);
+            if (skipFailing) await recordIndexerSuccess(r.indexer);
+            return result;
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : "Failed";
+            logger.log(`[AutoGrab] Usenet ${i + 1} failed: ${msg}`);
+            if (skipFailing) await recordIndexerFailure(r.indexer);
+            if (msg.includes("no longer exists") || msg.includes("Foreign key")) {
+              return { success: false, message: "Request was deleted" };
+            }
+          }
+        }
+        logger.log(`[AutoGrab] All usenet results failed, trying next source`);
+
+      } else if (source === "ia") {
+        if (!archiveOrgEnabled) { logger.log(`[AutoGrab] Skipping Internet Archive (disabled)`); continue; }
+
+        logger.log(`[AutoGrab] Trying Internet Archive for "${request.game.name}" (${request.game.platform.name})`);
+        const iaResult = await searchAndDownloadFromIA(
+          request.game.name, request.game.platform.name, settings.prowlarrMaxSizeMb,
+        );
+
+        if (iaResult) {
+          await prisma.download.create({
+            data: {
+              requestId, downloadType: "direct",
+              torrentName: iaResult.result.fileName,
+              magnetUrl: iaResult.result.filePath,
+              indexer: "Internet Archive",
+              status: "COMPLETED", progress: 100,
+            },
+          });
+          await prisma.request.update({ where: { id: requestId }, data: { status: "DOWNLOADING" } });
+          const dl = await prisma.download.findFirst({
+            where: { requestId, downloadType: "direct", status: "COMPLETED" },
+            orderBy: { createdAt: "desc" },
+          });
+          if (dl) copyAndScan(requestId, dl.id);
+          return {
+            success: true,
+            message: `Downloaded "${iaResult.result.fileName}" from Internet Archive (${iaResult.itemTitle})`,
+            torrentTitle: iaResult.result.fileName,
+            indexer: "Internet Archive",
+          };
+        }
+        logger.log(`[AutoGrab] Internet Archive had no suitable results`);
+      }
+    }
+
+    return { success: false, message: `No results from any enabled source for "${request.game.name}"` };
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Auto-grab failed";
     // Don't try to create a download record if the request was deleted

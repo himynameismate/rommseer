@@ -22,6 +22,11 @@ import {
   Newspaper,
   Settings,
   Bell,
+  ChevronUp,
+  ChevronDown,
+  Magnet,
+  Globe,
+  ListOrdered,
 } from "lucide-react";
 
 interface SettingsData {
@@ -50,7 +55,9 @@ interface SettingsData {
   sabnzbdApiKey: string;
   sabnzbdCategory: string;
   torrentEnabled: boolean;
+  usenetEnabled: boolean;
   archiveOrgEnabled: boolean;
+  downloadPriority: string;
   autoApprove: boolean;
   rommLibraryPath: string;
   discordWebhookUrl: string;
@@ -95,14 +102,14 @@ function ToggleSwitch({ checked, onChange, label, description }: {
   );
 }
 
-type TabKey = "general" | "romm" | "igdb" | "prowlarr" | "ia" | "qbit" | "sabnzbd" | "notifications";
+type TabKey = "general" | "romm" | "igdb" | "prowlarr" | "priority" | "qbit" | "sabnzbd" | "notifications";
 
 const tabs: { key: TabKey; label: string; icon: React.ReactNode; description: string }[] = [
   { key: "general", label: "General", icon: <Settings className="h-4 w-4" />, description: "General settings" },
   { key: "romm", label: "RomM", icon: <Server className="h-4 w-4" />, description: "ROM library connection" },
   { key: "igdb", label: "IGDB", icon: <Gamepad2 className="h-4 w-4" />, description: "Game discovery API" },
   { key: "prowlarr", label: "Prowlarr", icon: <Search className="h-4 w-4" />, description: "Indexer search" },
-  { key: "ia", label: "Internet Archive", icon: <Download className="h-4 w-4" />, description: "Direct ROM downloads" },
+  { key: "priority", label: "Download Priority", icon: <ListOrdered className="h-4 w-4" />, description: "Source order & toggles" },
   { key: "qbit", label: "qBittorrent", icon: <Download className="h-4 w-4" />, description: "Torrent client" },
   { key: "sabnzbd", label: "SABnzbd", icon: <Newspaper className="h-4 w-4" />, description: "Usenet client" },
   { key: "notifications", label: "Notifications", icon: <Bell className="h-4 w-4" />, description: "Discord & alerts" },
@@ -137,7 +144,9 @@ export default function SettingsPage() {
     sabnzbdApiKey: "",
     sabnzbdCategory: "rommseer",
     torrentEnabled: true,
+    usenetEnabled: true,
     archiveOrgEnabled: false,
+    downloadPriority: "torrent,usenet,ia",
     autoApprove: false,
     rommLibraryPath: "",
     discordWebhookUrl: "",
@@ -196,7 +205,9 @@ export default function SettingsPage() {
           sabnzbdApiKey: data.sabnzbdApiKey ?? "",
           sabnzbdCategory: data.sabnzbdCategory ?? "rommseer",
           torrentEnabled: data.torrentEnabled ?? true,
+          usenetEnabled: data.usenetEnabled ?? true,
           archiveOrgEnabled: data.archiveOrgEnabled ?? false,
+          downloadPriority: data.downloadPriority ?? "torrent,usenet,ia",
           autoApprove: data.autoApprove ?? false,
           rommLibraryPath: data.rommLibraryPath ?? "",
           discordWebhookUrl: data.discordWebhookUrl ?? "",
@@ -252,7 +263,9 @@ export default function SettingsPage() {
           sabnzbdApiKey: data.sabnzbdApiKey,
           sabnzbdCategory: data.sabnzbdCategory,
           torrentEnabled: data.torrentEnabled ?? true,
+          usenetEnabled: data.usenetEnabled ?? true,
           archiveOrgEnabled: data.archiveOrgEnabled ?? false,
+          downloadPriority: data.downloadPriority ?? "torrent,usenet,ia",
           autoApprove: data.autoApprove,
           rommLibraryPath: data.rommLibraryPath ?? "",
           discordWebhookUrl: data.discordWebhookUrl ?? "",
@@ -745,56 +758,129 @@ export default function SettingsPage() {
                 </div>
               )}
 
-              {/* Internet Archive */}
-              {activeTab === "ia" && (
-                <div className="space-y-6">
-                  <div>
-                    <h2 className="text-lg font-semibold">Internet Archive Downloads</h2>
-                    <p className="text-sm text-muted-foreground">
-                      Search and download ROMs directly from the Internet Archive.
-                      Files are downloaded via HTTP without needing a torrent or Usenet client.
-                    </p>
-                  </div>
+              {/* Download Priority */}
+              {activeTab === "priority" && (() => {
+                type SourceKey = "torrent" | "usenet" | "ia";
+                const order = (settings.downloadPriority || "torrent,usenet,ia")
+                  .split(",").map((s) => s.trim()).filter(Boolean) as SourceKey[];
 
-                  <div className="space-y-4">
-                    <ToggleSwitch
-                      checked={settings.archiveOrgEnabled}
-                      onChange={(v) => setSettings((s) => ({ ...s, archiveOrgEnabled: v }))}
-                      label="Enable Internet Archive Downloads"
-                    />
+                const sourceInfo: Record<SourceKey, { label: string; description: string; icon: React.ReactNode }> = {
+                  torrent: {
+                    label: "Torrent (qBittorrent)",
+                    description: "Searches Prowlarr indexers for torrents and downloads via qBittorrent.",
+                    icon: <Magnet className="h-4 w-4 text-muted-foreground" />,
+                  },
+                  usenet: {
+                    label: "Usenet (SABnzbd)",
+                    description: "Searches Prowlarr indexers for NZBs and downloads via SABnzbd.",
+                    icon: <Newspaper className="h-4 w-4 text-muted-foreground" />,
+                  },
+                  ia: {
+                    label: "Internet Archive",
+                    description: "Searches archive.org directly. No torrent or Usenet client required.",
+                    icon: <Globe className="h-4 w-4 text-muted-foreground" />,
+                  },
+                };
+
+                const enabledMap: Record<SourceKey, boolean> = {
+                  torrent: settings.torrentEnabled,
+                  usenet: settings.usenetEnabled,
+                  ia: settings.archiveOrgEnabled,
+                };
+
+                const setEnabled = (source: SourceKey, value: boolean) => {
+                  if (source === "torrent") setSettings((s) => ({ ...s, torrentEnabled: value }));
+                  else if (source === "usenet") setSettings((s) => ({ ...s, usenetEnabled: value }));
+                  else setSettings((s) => ({ ...s, archiveOrgEnabled: value }));
+                };
+
+                const move = (index: number, direction: -1 | 1) => {
+                  const newOrder = [...order];
+                  const target = index + direction;
+                  if (target < 0 || target >= newOrder.length) return;
+                  [newOrder[index], newOrder[target]] = [newOrder[target], newOrder[index]];
+                  setSettings((s) => ({ ...s, downloadPriority: newOrder.join(",") }));
+                };
+
+                return (
+                  <div className="space-y-6">
+                    <div>
+                      <h2 className="text-lg font-semibold">Download Priority</h2>
+                      <p className="text-sm text-muted-foreground">
+                        Choose which download sources are active and the order they are tried.
+                        Rommseer works through the list top-to-bottom until a download succeeds.
+                      </p>
+                    </div>
+
+                    <div className="space-y-3">
+                      {order.map((source, index) => {
+                        const info = sourceInfo[source];
+                        const enabled = enabledMap[source];
+                        return (
+                          <div
+                            key={source}
+                            className={`flex items-center gap-3 rounded-lg border p-4 transition-opacity ${!enabled ? "opacity-50" : ""}`}
+                          >
+                            {/* Priority rank */}
+                            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">
+                              {index + 1}
+                            </span>
+
+                            {/* Up / Down */}
+                            <div className="flex shrink-0 flex-col gap-0.5">
+                              <button
+                                type="button"
+                                onClick={() => move(index, -1)}
+                                disabled={index === 0}
+                                className="rounded p-0.5 text-muted-foreground hover:bg-muted disabled:opacity-30"
+                              >
+                                <ChevronUp className="h-4 w-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => move(index, 1)}
+                                disabled={index === order.length - 1}
+                                className="rounded p-0.5 text-muted-foreground hover:bg-muted disabled:opacity-30"
+                              >
+                                <ChevronDown className="h-4 w-4" />
+                              </button>
+                            </div>
+
+                            {/* Icon + text */}
+                            <div className="shrink-0">{info.icon}</div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium">{info.label}</p>
+                              <p className="text-xs text-muted-foreground">{info.description}</p>
+                            </div>
+
+                            {/* Toggle */}
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={enabled}
+                              onClick={() => setEnabled(source, !enabled)}
+                              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                                enabled ? "bg-primary" : "bg-muted-foreground/30"
+                              }`}
+                            >
+                              <span
+                                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition-transform ${
+                                  enabled ? "translate-x-5" : "translate-x-0"
+                                }`}
+                              />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+
                     <p className="text-xs text-muted-foreground">
-                      When enabled, Rommseer will search the Internet Archive as a
-                      fallback when Prowlarr finds no results. The search is automatic
-                      and requires no configuration — archive.org is always accessible
-                      without API keys or authentication.
+                      Connection settings for each source are configured in their respective tabs.
+                      Internet Archive requires no connection setup — it is always accessible.
                     </p>
                   </div>
-
-                  <div className="border-t pt-4 space-y-4">
-                    <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-                      How It Works
-                    </h3>
-                    <ul className="space-y-2 text-xs text-muted-foreground list-disc list-inside">
-                      <li>When a request is approved and Prowlarr finds no results, Rommseer searches the Internet Archive</li>
-                      <li>Results are scored by ROM extension match for the target platform (e.g., .gba for Game Boy Advance)</li>
-                      <li>Files are downloaded directly to your downloads folder</li>
-                      <li>Downloaded files are automatically copied to your RomM library and scanned</li>
-                      <li>Rate limiting is respected — safe for batch operations</li>
-                    </ul>
-                  </div>
-
-                  <div className="border-t pt-4 space-y-4">
-                    <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-                      Notes
-                    </h3>
-                    <p className="text-xs text-muted-foreground">
-                      Internet Archive has a large collection of abandonware and historical software,
-                      but coverage varies by platform and title. For best results, combine with
-                      Prowlarr searches and the torrent/Usenet clients configured below.
-                    </p>
-                  </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* qBittorrent */}
               {activeTab === "qbit" && (
@@ -807,21 +893,6 @@ export default function SettingsPage() {
                     </p>
                   </div>
 
-                  <div className="space-y-4">
-                    <ToggleSwitch
-                      checked={settings.torrentEnabled}
-                      onChange={(v) => setSettings((s) => ({ ...s, torrentEnabled: v }))}
-                      label="Enable Torrent Downloads"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      When disabled, torrent results from Prowlarr will be skipped and only
-                      Usenet (SABnzbd) or direct downloads (Internet Archive) will be used.
-                      Useful if you only want to use Usenet or direct HTTP downloads.
-                    </p>
-                  </div>
-
-                  {settings.torrentEnabled && (
-                  <>
                   <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-2">
                       <label className="text-sm font-medium">qBittorrent URL</label>
@@ -941,8 +1012,6 @@ export default function SettingsPage() {
                     </Button>
                     <ConnectionBadge result={qbitResult} />
                   </div>
-                  </>
-                  )}
                 </div>
               )}
 
