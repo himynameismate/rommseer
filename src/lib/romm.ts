@@ -226,8 +226,14 @@ export class RomMClient {
     const params = new URLSearchParams();
     if (platformId) params.set("platform_id", String(platformId));
     if (search) params.set("search_term", search);
+    // Request a large page to avoid needing to paginate (RomM 4.x paginates by default)
+    params.set("limit", "10000");
+    params.set("size", "10000");
     const query = params.toString();
-    return this.fetch<RomMRom[]>(`/roms${query ? `?${query}` : ""}`);
+    // RomM 4.x changed /api/roms to return a paginated object { items: [...], total, page, size }
+    // instead of a plain array. Handle both formats for compatibility.
+    const data = await this.fetch<RomMRom[] | { items: RomMRom[] }>(`/roms${query ? `?${query}` : ""}`);
+    return Array.isArray(data) ? data : (data.items ?? []);
   }
 
   async getRom(id: number): Promise<RomMRom> {
