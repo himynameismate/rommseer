@@ -95,13 +95,14 @@ function ToggleSwitch({ checked, onChange, label, description }: {
   );
 }
 
-type TabKey = "general" | "romm" | "igdb" | "prowlarr" | "qbit" | "sabnzbd" | "notifications";
+type TabKey = "general" | "romm" | "igdb" | "prowlarr" | "ia" | "qbit" | "sabnzbd" | "notifications";
 
 const tabs: { key: TabKey; label: string; icon: React.ReactNode; description: string }[] = [
   { key: "general", label: "General", icon: <Settings className="h-4 w-4" />, description: "General settings" },
   { key: "romm", label: "RomM", icon: <Server className="h-4 w-4" />, description: "ROM library connection" },
   { key: "igdb", label: "IGDB", icon: <Gamepad2 className="h-4 w-4" />, description: "Game discovery API" },
   { key: "prowlarr", label: "Prowlarr", icon: <Search className="h-4 w-4" />, description: "Indexer search" },
+  { key: "ia", label: "Internet Archive", icon: <Download className="h-4 w-4" />, description: "Direct ROM downloads" },
   { key: "qbit", label: "qBittorrent", icon: <Download className="h-4 w-4" />, description: "Torrent client" },
   { key: "sabnzbd", label: "SABnzbd", icon: <Newspaper className="h-4 w-4" />, description: "Usenet client" },
   { key: "notifications", label: "Notifications", icon: <Bell className="h-4 w-4" />, description: "Discord & alerts" },
@@ -741,24 +742,56 @@ export default function SettingsPage() {
                     </div>
                   </div>
 
-                  {/* Internet Archive section */}
-                  <div className="border-t pt-4">
-                    <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-                      Internet Archive
+                </div>
+              )}
+
+              {/* Internet Archive */}
+              {activeTab === "ia" && (
+                <div className="space-y-6">
+                  <div>
+                    <h2 className="text-lg font-semibold">Internet Archive Downloads</h2>
+                    <p className="text-sm text-muted-foreground">
+                      Search and download ROMs directly from the Internet Archive.
+                      Files are downloaded via HTTP without needing a torrent or Usenet client.
+                    </p>
+                  </div>
+
+                  <div className="space-y-4">
+                    <ToggleSwitch
+                      checked={settings.archiveOrgEnabled}
+                      onChange={(v) => setSettings((s) => ({ ...s, archiveOrgEnabled: v }))}
+                      label="Enable Internet Archive Downloads"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      When enabled, Rommseer will search the Internet Archive as a
+                      fallback when Prowlarr finds no results. The search is automatic
+                      and requires no configuration — archive.org is always accessible
+                      without API keys or authentication.
+                    </p>
+                  </div>
+
+                  <div className="border-t pt-4 space-y-4">
+                    <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                      How It Works
                     </h3>
-                    <div className="space-y-4">
-                      <ToggleSwitch
-                        checked={settings.archiveOrgEnabled}
-                        onChange={(v) => setSettings((s) => ({ ...s, archiveOrgEnabled: v }))}
-                        label="Internet Archive Downloads"
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        When enabled, Rommseer will search the Internet Archive as a
-                        fallback when Prowlarr finds no results. Files are downloaded
-                        directly via HTTP without needing a torrent or Usenet client.
-                        No API key required.
-                      </p>
-                    </div>
+                    <ul className="space-y-2 text-xs text-muted-foreground list-disc list-inside">
+                      <li>When a request is approved and Prowlarr finds no results, Rommseer searches the Internet Archive</li>
+                      <li>Results are scored by ROM extension match for the target platform (e.g., .gba for Game Boy Advance)</li>
+                      <li>Files are downloaded directly to your downloads folder</li>
+                      <li>Downloaded files are automatically copied to your RomM library and scanned</li>
+                      <li>Rate limiting is respected — safe for batch operations</li>
+                    </ul>
+                  </div>
+
+                  <div className="border-t pt-4 space-y-4">
+                    <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                      Notes
+                    </h3>
+                    <p className="text-xs text-muted-foreground">
+                      Internet Archive has a large collection of abandonware and historical software,
+                      but coverage varies by platform and title. For best results, combine with
+                      Prowlarr searches and the torrent/Usenet clients configured below.
+                    </p>
                   </div>
                 </div>
               )}
