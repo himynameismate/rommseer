@@ -272,8 +272,27 @@ const DOWNLOADS_PATH = "/downloads";
  *  So we use the download name to locate the files in /downloads/.
  */
 async function getSourcePath(
-  download: { downloadType: string; nzbId: string | null; torrentHash: string | null; torrentName: string | null }
+  download: { downloadType: string; nzbId: string | null; torrentHash: string | null; torrentName: string | null; magnetUrl: string | null }
 ): Promise<string | null> {
+  // Direct downloads (e.g. Internet Archive): file path stored in magnetUrl field
+  if (download.downloadType === "direct" && download.magnetUrl) {
+    const resolved = path.resolve(download.magnetUrl);
+    if (resolved.startsWith(path.resolve(DOWNLOADS_PATH)) && fs.existsSync(resolved)) {
+      logger.log(`[PostCopy] Direct download at: ${resolved}`);
+      return resolved;
+    }
+    // Also try /downloads/<torrentName> as fallback
+    if (download.torrentName) {
+      const fallback = path.join(DOWNLOADS_PATH, download.torrentName);
+      if (fs.existsSync(fallback)) {
+        logger.log(`[PostCopy] Direct download found at: ${fallback}`);
+        return fallback;
+      }
+    }
+    logger.log(`[PostCopy] Direct download file not found: ${download.magnetUrl}`);
+    return null;
+  }
+
   if (download.downloadType === "usenet" && download.nzbId) {
     const sabnzbd = await getCachedSABnzbdClient();
     if (!sabnzbd) return null;

@@ -111,6 +111,8 @@ model Settings {
   notifyOnFailed        Boolean @default(true)
   librarySyncHours      Int     @default(6) // How often to sync RomM library (0 = disabled)
   prowlarrDryRun        Boolean @default(false) // Log auto-grab results without downloading
+  torrentEnabled        Boolean @default(true)  // Allow torrent downloads via qBittorrent
+  archiveOrgEnabled     Boolean @default(false) // Search & download directly from Internet Archive
   registrationEnabled   Boolean @default(false) // Allow self-registration
   initialized           Boolean @default(false)
 }

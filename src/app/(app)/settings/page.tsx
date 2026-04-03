@@ -49,6 +49,8 @@ interface SettingsData {
   sabnzbdUrl: string;
   sabnzbdApiKey: string;
   sabnzbdCategory: string;
+  torrentEnabled: boolean;
+  archiveOrgEnabled: boolean;
   autoApprove: boolean;
   rommLibraryPath: string;
   discordWebhookUrl: string;
@@ -133,6 +135,8 @@ export default function SettingsPage() {
     sabnzbdUrl: "",
     sabnzbdApiKey: "",
     sabnzbdCategory: "rommseer",
+    torrentEnabled: true,
+    archiveOrgEnabled: false,
     autoApprove: false,
     rommLibraryPath: "",
     discordWebhookUrl: "",
@@ -190,6 +194,8 @@ export default function SettingsPage() {
           sabnzbdUrl: data.sabnzbdUrl ?? "",
           sabnzbdApiKey: data.sabnzbdApiKey ?? "",
           sabnzbdCategory: data.sabnzbdCategory ?? "rommseer",
+          torrentEnabled: data.torrentEnabled ?? true,
+          archiveOrgEnabled: data.archiveOrgEnabled ?? false,
           autoApprove: data.autoApprove ?? false,
           rommLibraryPath: data.rommLibraryPath ?? "",
           discordWebhookUrl: data.discordWebhookUrl ?? "",
@@ -244,6 +250,8 @@ export default function SettingsPage() {
           sabnzbdUrl: data.sabnzbdUrl,
           sabnzbdApiKey: data.sabnzbdApiKey,
           sabnzbdCategory: data.sabnzbdCategory,
+          torrentEnabled: data.torrentEnabled ?? true,
+          archiveOrgEnabled: data.archiveOrgEnabled ?? false,
           autoApprove: data.autoApprove,
           rommLibraryPath: data.rommLibraryPath ?? "",
           discordWebhookUrl: data.discordWebhookUrl ?? "",
@@ -732,6 +740,26 @@ export default function SettingsPage() {
                       )}
                     </div>
                   </div>
+
+                  {/* Internet Archive section */}
+                  <div className="border-t pt-4">
+                    <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                      Internet Archive
+                    </h3>
+                    <div className="space-y-4">
+                      <ToggleSwitch
+                        checked={settings.archiveOrgEnabled}
+                        onChange={(v) => setSettings((s) => ({ ...s, archiveOrgEnabled: v }))}
+                        label="Internet Archive Downloads"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        When enabled, Rommseer will search the Internet Archive as a
+                        fallback when Prowlarr finds no results. Files are downloaded
+                        directly via HTTP without needing a torrent or Usenet client.
+                        No API key required.
+                      </p>
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -745,6 +773,22 @@ export default function SettingsPage() {
                       Used by Prowlarr auto-grab and manual torrent downloads.
                     </p>
                   </div>
+
+                  <div className="space-y-4">
+                    <ToggleSwitch
+                      checked={settings.torrentEnabled}
+                      onChange={(v) => setSettings((s) => ({ ...s, torrentEnabled: v }))}
+                      label="Enable Torrent Downloads"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      When disabled, torrent results from Prowlarr will be skipped and only
+                      Usenet (SABnzbd) or direct downloads (Internet Archive) will be used.
+                      Useful if you only want to use Usenet or direct HTTP downloads.
+                    </p>
+                  </div>
+
+                  {settings.torrentEnabled && (
+                  <>
                   <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-2">
                       <label className="text-sm font-medium">qBittorrent URL</label>
@@ -864,6 +908,8 @@ export default function SettingsPage() {
                     </Button>
                     <ConnectionBadge result={qbitResult} />
                   </div>
+                  </>
+                  )}
                 </div>
               )}
 

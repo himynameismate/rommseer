@@ -1,0 +1,346 @@
+/**
+ * Internet Archive client for searching and downloading ROMs directly.
+ * Uses the IA Advanced Search API and direct download URLs.
+ * No external dependencies — just fetch() against archive.org endpoints.
+ */
+import { logger } from "@/lib/utils";
+import * as fs from "fs";
+import * as path from "path";
+
+const DOWNLOADS_PATH = "/downloads";
+
+/** A single item returned from IA Advanced Search */
+export interface IASearchResult {
+  identifier: string;
+  title: string;
+  description?: string;
+  mediatype?: string;
+  downloads?: number;
+}
+
+/** A file within an IA item */
+interface IAFile {
+  name: string;
+  size: string;
+  format: string;
+  source?: string;
+}
+
+/** Result of downloading a file from IA */
+export interface IADownloadResult {
+  /** Absolute path where the file was saved */
+  filePath: string;
+  /** Original filename */
+  fileName: string;
+  /** Size in bytes */
+  size: number;
+}
+
+// Platform abbreviations for IA search queries
+const IA_PLATFORM_TERMS: Record<string, string[]> = {
+  "game boy advance": ["gba", "game boy advance", "gameboy advance"],
+  "game boy color": ["gbc", "game boy color"],
+  "game boy": ["gb", "game boy", "gameboy"],
+  "nintendo ds": ["nds", "nintendo ds"],
+  "nintendo 3ds": ["3ds", "nintendo 3ds"],
+  "nintendo entertainment system": ["nes", "nintendo"],
+  "super nintendo entertainment system": ["snes", "super nintendo"],
+  "nintendo 64": ["n64", "nintendo 64"],
+  "gamecube": ["gamecube", "gcn"],
+  "wii": ["wii"],
+  "nintendo switch": ["switch", "nintendo switch"],
+  "playstation": ["psx", "ps1", "playstation"],
+  "playstation 2": ["ps2"],
+  "playstation portable": ["psp"],
+  "sega mega drive/genesis": ["genesis", "mega drive", "sega genesis"],
+  "sega master system": ["sms", "master system"],
+  "dreamcast": ["dreamcast"],
+  "game gear": ["game gear"],
+};
+
+// Valid ROM extensions per platform (subset for filtering IA files)
+const IA_ROM_EXTENSIONS: Record<string, string[]> = {
+  "game boy advance": [".gba"],
+  "game boy color": [".gbc", ".gb"],
+  "game boy": [".gb"],
+  "nintendo ds": [".nds"],
+  "nintendo 3ds": [".3ds", ".cia"],
+  "nintendo entertainment system": [".nes"],
+  "super nintendo entertainment system": [".sfc", ".smc"],
+  "nintendo 64": [".n64", ".z64", ".v64"],
+  "gamecube": [".iso", ".gcm", ".gcz", ".rvz"],
+  "wii": [".iso", ".wbfs", ".rvz"],
+  "nintendo switch": [".nsp", ".xci", ".nsz"],
+  "playstation": [".bin", ".cue", ".iso", ".chd", ".pbp"],
+  "playstation 2": [".iso", ".chd"],
+  "playstation portable": [".iso", ".cso", ".pbp"],
+  "sega mega drive/genesis": [".md", ".gen", ".bin"],
+  "sega master system": [".sms"],
+  "dreamcast": [".gdi", ".cdi", ".chd"],
+  "game gear": [".gg"],
+};
+
+// Always allow archives (they often contain ROMs)
+const ARCHIVE_EXTENSIONS = [".zip", ".7z", ".rar"];
+
+/**
+ * Search the Internet Archive for ROMs matching a game name and platform.
+ * Uses the IA Advanced Search API (no authentication required).
+ */
+export async function searchArchiveOrg(
+  gameName: string,
+  platformName?: string,
+): Promise<IASearchResult[]> {
+  const platLower = platformName?.toLowerCase() || "";
+  const platTerms = IA_PLATFORM_TERMS[platLower] || [];
+  // Build a search query — prefer game name + platform keyword
+  const platKeyword = platTerms[0] || platformName || "";
+
+  // IA search: title contains the game name, mediatype is software
+  // Try two queries: with platform keyword, then without
+  const queries: string[] = [];
+  if (platKeyword) {
+    queries.push(`title:(${gameName}) AND (${platKeyword}) AND mediatype:software`);
+  }
+  queries.push(`title:(${gameName}) AND mediatype:software`);
+
+  const seen = new Set<string>();
+  const results: IASearchResult[] = [];
+
+  for (const q of queries) {
+    try {
+      const params = new URLSearchParams({
+        q,
+        "fl[]": "identifier,title,description,mediatype,downloads",
+        rows: "20",
+        output: "json",
+        sort: "downloads desc",
+      });
+
+      // IA uses fl[] repeated, URLSearchParams doesn't handle that well
+      const url = `https://archive.org/advancedsearch.php?q=${encodeURIComponent(q)}&fl[]=identifier&fl[]=title&fl[]=description&fl[]=mediatype&fl[]=downloads&rows=20&output=json&sort=downloads+desc`;
+
+      logger.log(`[ArchiveOrg] Searching: ${q}`);
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(15000),
+      });
+
+      if (!res.ok) {
+        logger.error(`[ArchiveOrg] Search returned ${res.status}`);
+        continue;
+      }
+
+      const data = await res.json() as {
+        response: { docs: IASearchResult[] };
+      };
+
+      for (const doc of data.response.docs) {
+        if (!seen.has(doc.identifier)) {
+          seen.add(doc.identifier);
+          results.push(doc);
+        }
+      }
+
+      logger.log(`[ArchiveOrg] "${q}": ${data.response.docs.length} results (${results.length} total)`);
+
+      // If first platform-specific query got results, don't bother with the generic one
+      if (results.length >= 3) break;
+    } catch (e) {
+      logger.error(`[ArchiveOrg] Search error:`, e instanceof Error ? e.message : e);
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Get the list of files in an IA item and find the best ROM file for the target platform.
+ * Returns the file metadata if a suitable ROM is found, null otherwise.
+ */
+export async function findRomInItem(
+  identifier: string,
+  platformName?: string,
+): Promise<{ fileName: string; size: number; downloadUrl: string } | null> {
+  try {
+    const url = `https://archive.org/metadata/${encodeURIComponent(identifier)}/files`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) return null;
+
+    const data = await res.json() as { result: IAFile[] };
+    const files = data.result || [];
+
+    // Get valid extensions for the target platform
+    const platLower = platformName?.toLowerCase() || "";
+    const validExts = IA_ROM_EXTENSIONS[platLower] || [];
+
+    // Score each file: prefer platform-specific ROM extensions, then archives
+    const candidates: { file: IAFile; score: number }[] = [];
+
+    for (const file of files) {
+      const ext = path.extname(file.name).toLowerCase();
+      const size = parseInt(file.size, 10) || 0;
+
+      // Skip tiny files (metadata, thumbnails, etc.)
+      if (size < 1024) continue;
+
+      // Skip IA metadata files
+      if (file.source === "metadata" || file.format === "Metadata") continue;
+      if (file.name.endsWith("_meta.xml") || file.name.endsWith("_files.xml")) continue;
+      if (file.name.endsWith(".torrent")) continue;
+
+      let score = 0;
+
+      if (validExts.length > 0 && validExts.includes(ext)) {
+        score = 100; // Exact platform match
+      } else if (ARCHIVE_EXTENSIONS.includes(ext)) {
+        score = 50; // Archive — might contain ROM
+      } else {
+        continue; // Not a ROM or archive, skip
+      }
+
+      // Boost by size (larger files are more likely to be the actual ROM)
+      score += Math.min(size / (1024 * 1024), 10); // up to +10 for 10MB+
+
+      candidates.push({ file, score });
+    }
+
+    if (candidates.length === 0) {
+      logger.log(`[ArchiveOrg] No ROM files found in item "${identifier}" for platform "${platformName}"`);
+      return null;
+    }
+
+    // Sort by score descending
+    candidates.sort((a, b) => b.score - a.score);
+    const best = candidates[0].file;
+    const size = parseInt(best.size, 10) || 0;
+
+    logger.log(`[ArchiveOrg] Best file in "${identifier}": "${best.name}" (${(size / 1024 / 1024).toFixed(1)} MB)`);
+
+    return {
+      fileName: best.name,
+      size,
+      downloadUrl: `https://archive.org/download/${encodeURIComponent(identifier)}/${encodeURIComponent(best.name)}`,
+    };
+  } catch (e) {
+    logger.error(`[ArchiveOrg] Failed to list files for "${identifier}":`, e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
+/**
+ * Download a file from the Internet Archive directly to /downloads/.
+ * Returns the local file path on success, null on failure.
+ */
+export async function downloadFromArchiveOrg(
+  downloadUrl: string,
+  fileName: string,
+  maxSizeMb: number = 0,
+): Promise<IADownloadResult | null> {
+  const safeName = path.basename(fileName); // Prevent path traversal
+  const destPath = path.join(DOWNLOADS_PATH, safeName);
+
+  // Validate destination is within /downloads
+  const resolved = path.resolve(destPath);
+  if (!resolved.startsWith(path.resolve(DOWNLOADS_PATH) + path.sep) && resolved !== path.resolve(DOWNLOADS_PATH)) {
+    logger.error(`[ArchiveOrg] Path traversal detected: "${resolved}"`);
+    return null;
+  }
+
+  try {
+    logger.log(`[ArchiveOrg] Downloading: ${downloadUrl}`);
+
+    const res = await fetch(downloadUrl, {
+      signal: AbortSignal.timeout(300000), // 5 minute timeout for large files
+      redirect: "follow",
+    });
+
+    if (!res.ok) {
+      logger.error(`[ArchiveOrg] Download returned ${res.status}`);
+      return null;
+    }
+
+    // Check size from Content-Length header before downloading
+    const contentLength = parseInt(res.headers.get("content-length") || "0", 10);
+    if (maxSizeMb > 0 && contentLength > maxSizeMb * 1024 * 1024) {
+      logger.log(`[ArchiveOrg] File too large: ${(contentLength / 1024 / 1024).toFixed(1)} MB (max: ${maxSizeMb} MB)`);
+      return null;
+    }
+
+    const buffer = Buffer.from(await res.arrayBuffer());
+
+    if (buffer.length < 1024) {
+      logger.error(`[ArchiveOrg] Downloaded file too small (${buffer.length} bytes)`);
+      return null;
+    }
+
+    // Ensure /downloads exists
+    fs.mkdirSync(DOWNLOADS_PATH, { recursive: true });
+    fs.writeFileSync(destPath, buffer);
+
+    logger.log(`[ArchiveOrg] Saved: ${destPath} (${(buffer.length / 1024 / 1024).toFixed(1)} MB)`);
+
+    return {
+      filePath: destPath,
+      fileName: safeName,
+      size: buffer.length,
+    };
+  } catch (e) {
+    logger.error(`[ArchiveOrg] Download failed:`, e instanceof Error ? e.message : e);
+    // Clean up partial file
+    try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch { /* ignore */ }
+    return null;
+  }
+}
+
+/**
+ * Full search-and-download pipeline for the Internet Archive.
+ * Searches for a game, finds the best ROM file, downloads it.
+ * Returns the download result or null if nothing suitable was found.
+ */
+export async function searchAndDownloadFromIA(
+  gameName: string,
+  platformName?: string,
+  maxSizeMb: number = 0,
+): Promise<{
+  result: IADownloadResult;
+  identifier: string;
+  itemTitle: string;
+} | null> {
+  const results = await searchArchiveOrg(gameName, platformName);
+  if (!results.length) {
+    logger.log(`[ArchiveOrg] No results for "${gameName}"`);
+    return null;
+  }
+
+  // Try up to 5 items
+  for (let i = 0; i < Math.min(results.length, 5); i++) {
+    const item = results[i];
+    logger.log(`[ArchiveOrg] Checking item ${i + 1}: "${item.title}" (${item.identifier})`);
+
+    // Basic relevance check — item title should contain the game name
+    const normalize = (s: string) =>
+      s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+    const normalizedTitle = normalize(item.title);
+    const normalizedGame = normalize(gameName);
+
+    if (!normalizedTitle.includes(normalizedGame)) {
+      logger.log(`[ArchiveOrg] Skipping "${item.title}" — not relevant to "${gameName}"`);
+      continue;
+    }
+
+    const romFile = await findRomInItem(item.identifier, platformName);
+    if (!romFile) continue;
+
+    const downloaded = await downloadFromArchiveOrg(romFile.downloadUrl, romFile.fileName, maxSizeMb);
+    if (!downloaded) continue;
+
+    return {
+      result: downloaded,
+      identifier: item.identifier,
+      itemTitle: item.title,
+    };
+  }
+
+  logger.log(`[ArchiveOrg] No suitable ROM found across ${Math.min(results.length, 5)} items`);
+  return null;
+}

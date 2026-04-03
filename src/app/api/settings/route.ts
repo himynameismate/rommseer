@@ -42,6 +42,8 @@ export async function GET() {
       sabnzbdUrl: "",
       sabnzbdApiKey: "",
       sabnzbdCategory: "rommseer",
+      torrentEnabled: true,
+      archiveOrgEnabled: false,
       autoApprove: false,
       rommLibraryPath: "",
       discordWebhookUrl: "",
@@ -100,6 +102,8 @@ export async function PUT(req: NextRequest) {
     sabnzbdUrl,
     sabnzbdApiKey,
     sabnzbdCategory,
+    torrentEnabled,
+    archiveOrgEnabled,
     autoApprove,
     rommLibraryPath,
     discordWebhookUrl,
@@ -172,6 +176,8 @@ export async function PUT(req: NextRequest) {
     data.prowlarrSkipFailingIndexers = prowlarrSkipFailingIndexers;
   if (stallDetectEnabled !== undefined) data.stallDetectEnabled = stallDetectEnabled;
   if (stallDetectMinutes !== undefined) data.stallDetectMinutes = Number(stallDetectMinutes);
+  if (torrentEnabled !== undefined) data.torrentEnabled = torrentEnabled;
+  if (archiveOrgEnabled !== undefined) data.archiveOrgEnabled = archiveOrgEnabled;
 
   // SABnzbd
   if (sabnzbdUrl !== undefined) data.sabnzbdUrl = sabnzbdUrl;
@@ -223,6 +229,8 @@ export async function PUT(req: NextRequest) {
       sabnzbdUrl: sabnzbdUrl ?? "",
       sabnzbdApiKey: sabnzbdApiKey ?? "",
       sabnzbdCategory: sabnzbdCategory ?? "rommseer",
+      torrentEnabled: torrentEnabled ?? true,
+      archiveOrgEnabled: archiveOrgEnabled ?? false,
       autoApprove: autoApprove ?? false,
       rommLibraryPath: rommLibraryPath ?? "",
       discordWebhookUrl: discordWebhookUrl ?? "",

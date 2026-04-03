@@ -229,6 +229,7 @@ export async function syncAndRetryDownloads(
       const hMap = new Map(history.slots.map((s) => [s.nzo_id, s]));
 
       for (const dl of downloads) {
+        if (dl.downloadType === "direct") continue; // Direct downloads complete immediately, no sync needed
         if (dl.downloadType !== "usenet" || !dl.nzbId || dl.status !== "DOWNLOADING") continue;
         const hs = hMap.get(dl.nzbId);
         const qs = qMap.get(dl.nzbId);
@@ -276,7 +277,7 @@ export async function syncAndRetryDownloads(
       const tNameMap = new Map(torrents.map((t) => [t.name.toLowerCase(), t]));
 
       for (const dl of downloads) {
-        if (dl.downloadType === "usenet" || dl.status !== "DOWNLOADING") continue;
+        if (dl.downloadType === "usenet" || dl.downloadType === "direct" || dl.status !== "DOWNLOADING") continue;
         // Match by hash first, then by torrent name (strict: exact match only)
         let t = dl.torrentHash ? tMap.get(dl.torrentHash) : undefined;
         if (!t && dl.torrentName) {
