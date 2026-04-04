@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Image from "next/image";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -20,8 +19,9 @@ interface LibraryGame {
   id: number;
   name: string;
   coverUrl: string | null;
-  releaseDate: string | null;
-  rating: number | null;
+  summary: string | null;
+  fileName: string;
+  fileSize: number;
   platform: { id: number; name: string; slug: string };
 }
 
@@ -38,6 +38,14 @@ interface LibraryResponse {
   pageSize: number;
   totalPages: number;
   platforms: LibraryPlatform[];
+  error?: string;
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 export default function LibraryPage() {
@@ -53,7 +61,7 @@ export default function LibraryPage() {
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearch(search);
-      setPage(1); // Reset to page 1 on new search
+      setPage(1);
     }, 300);
     return () => clearTimeout(timer);
   }, [search]);
@@ -92,7 +100,7 @@ export default function LibraryPage() {
     setPage(1);
   };
 
-  // Group games by name + igdbId for a compact display
+  // Group games by name for compact display
   // (same game on multiple platforms shows as one card with multiple platform badges)
   const groupedGames = useMemo(() => {
     if (!data?.games) return [];
@@ -103,16 +111,12 @@ export default function LibraryPage() {
     >();
 
     for (const game of data.games) {
-      // Group by name (case-insensitive) since the same game on different platforms
-      // are separate DB rows
       const key = game.name.toLowerCase();
       const existing = groups.get(key);
       if (existing) {
-        // Add platform if not already present
         if (!existing.platforms.some((p) => p.slug === game.platform.slug)) {
           existing.platforms.push(game.platform);
         }
-        // Keep the one with a cover
         if (!existing.game.coverUrl && game.coverUrl) {
           existing.game = game;
         }
@@ -133,9 +137,11 @@ export default function LibraryPage() {
       <div>
         <h1 className="text-3xl font-bold">Library</h1>
         <p className="text-muted-foreground">
-          {data
+          {data && !data.error
             ? `${data.total} game${data.total !== 1 ? "s" : ""} available in your library`
-            : "Browse games available in your library"}
+            : data?.error
+              ? data.error
+              : "Browse games available in your library"}
         </p>
       </div>
 
@@ -214,12 +220,12 @@ export default function LibraryPage() {
             >
               <div className="relative aspect-[3/4] w-full bg-muted">
                 {game.coverUrl ? (
-                  <Image
+                  /* eslint-disable-next-line @next/next/no-img-element */
+                  <img
                     src={game.coverUrl}
                     alt={game.name}
-                    fill
-                    className="object-cover"
-                    sizes="(max-width: 640px) 50vw, (max-width: 768px) 33vw, (max-width: 1024px) 25vw, (max-width: 1280px) 20vw, 16vw"
+                    className="h-full w-full object-cover"
+                    loading="lazy"
                   />
                 ) : (
                   <div className="flex h-full items-center justify-center text-muted-foreground text-xs">
@@ -245,9 +251,9 @@ export default function LibraryPage() {
                     </Badge>
                   ))}
                 </div>
-                {game.releaseDate && (
+                {game.fileSize > 0 && (
                   <p className="text-[11px] text-muted-foreground">
-                    {game.releaseDate.substring(0, 4)}
+                    {formatFileSize(game.fileSize)}
                   </p>
                 )}
               </CardContent>
