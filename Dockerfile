@@ -1,7 +1,7 @@
 FROM node:20-slim AS base
 
-# Install OpenSSL (required by Prisma) and p7zip-full (for ROM archive extraction)
-RUN apt-get update -y && apt-get install -y openssl p7zip-full && rm -rf /var/lib/apt/lists/*
+# Install OpenSSL (required by Prisma), p7zip-full + unar (for ROM archive extraction including RAR)
+RUN apt-get update -y && apt-get install -y openssl p7zip-full unar && rm -rf /var/lib/apt/lists/*
 
 # Dependencies
 FROM base AS deps

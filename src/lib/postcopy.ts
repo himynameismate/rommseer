@@ -128,8 +128,12 @@ export async function copyToRomMLibrary(
           if (download.downloadType === "direct") {
             try { fs.unlinkSync(srcFile); } catch { /* ignore */ }
           }
+        } else if (download.downloadType === "direct") {
+          // For direct downloads, don't copy the archive — RomM can't use it
+          logger.error(`[PostCopy] Extraction failed for "${filename}" (direct download), not copying archive`);
+          try { fs.unlinkSync(srcFile); } catch { /* ignore */ }
         } else {
-          // Extraction failed — fall back to copying the archive as-is
+          // For torrent/usenet downloads, fall back to copying the archive as-is
           logger.log(`[PostCopy] Extraction failed for "${filename}", copying archive as fallback`);
           const destFile = path.resolve(destDir, filename);
           if (!destFile.startsWith(destDir + path.sep)) continue;
@@ -428,42 +432,56 @@ async function getPlatformSlug(
 }
 
 /**
- * Extract a .zip / .7z / .rar archive into destDir using the system 7z binary.
- * After extraction the archive itself is left at its original location (caller
- * decides whether to delete it).  Returns the number of ROM files extracted.
+ * Extract a .zip / .7z / .rar archive into destDir.
+ * Tries `7z e` first, then falls back to `unar` (better RAR support).
+ * Returns the number of ROM files extracted.
  */
 function extractArchiveToDir(archivePath: string, destDir: string): number {
+  fs.mkdirSync(destDir, { recursive: true });
+
+  // Snapshot files already present so we can detect what was extracted
+  const before = new Set(fs.existsSync(destDir) ? fs.readdirSync(destDir) : []);
+
+  // Try 7z first, then unar as fallback
+  let extracted = false;
   try {
-    fs.mkdirSync(destDir, { recursive: true });
-
-    // Snapshot files already present so we can detect what was extracted
-    const before = new Set(fs.existsSync(destDir) ? fs.readdirSync(destDir) : []);
-
-    // "7z e" extracts without directory structure; -y answers yes to all prompts
     execSync(`7z e "${archivePath}" -o"${destDir}" -y`, {
       stdio: ["pipe", "pipe", "pipe"],
       timeout: 120_000,
     });
-
-    // Count newly-appeared actual ROM files (not archives spawned by extraction)
-    const ARCHIVE_EXTS = new Set([".zip", ".7z", ".rar"]);
-    const after = fs.readdirSync(destDir);
-    const newRoms = after.filter((f) => {
-      if (before.has(f)) return false;
-      const ext = path.extname(f).toLowerCase();
-      return ROM_EXTENSIONS.has(ext) && !ARCHIVE_EXTS.has(ext);
-    });
-
-    if (newRoms.length === 0) {
-      logger.log(`[PostCopy] Archive "${path.basename(archivePath)}" extracted but no ROM files found inside`);
-    } else {
-      logger.log(`[PostCopy] Extracted: ${newRoms.join(", ")}`);
-    }
-    return newRoms.length;
+    extracted = true;
   } catch (e) {
-    logger.error(`[PostCopy] 7z extraction failed for "${path.basename(archivePath)}":`, e instanceof Error ? e.message : e);
-    return 0;
+    logger.log(`[PostCopy] 7z failed for "${path.basename(archivePath)}": ${e instanceof Error ? e.message : e}`);
+    // Try unar as fallback (better RAR/multi-format support)
+    try {
+      execSync(`unar -force-overwrite -no-directory -output-directory "${destDir}" "${archivePath}"`, {
+        stdio: ["pipe", "pipe", "pipe"],
+        timeout: 120_000,
+      });
+      extracted = true;
+      logger.log(`[PostCopy] unar succeeded for "${path.basename(archivePath)}"`);
+    } catch (e2) {
+      logger.error(`[PostCopy] unar also failed for "${path.basename(archivePath)}":`, e2 instanceof Error ? e2.message : e2);
+    }
   }
+
+  if (!extracted) return 0;
+
+  // Count newly-appeared actual ROM files (not archives spawned by extraction)
+  const ARCHIVE_EXTS_LOCAL = new Set([".zip", ".7z", ".rar"]);
+  const after = fs.readdirSync(destDir);
+  const newRoms = after.filter((f) => {
+    if (before.has(f)) return false;
+    const ext = path.extname(f).toLowerCase();
+    return ROM_EXTENSIONS.has(ext) && !ARCHIVE_EXTS_LOCAL.has(ext);
+  });
+
+  if (newRoms.length === 0) {
+    logger.log(`[PostCopy] Archive "${path.basename(archivePath)}" extracted but no ROM files found inside`);
+  } else {
+    logger.log(`[PostCopy] Extracted: ${newRoms.join(", ")}`);
+  }
+  return newRoms.length;
 }
 
 /** Find ROM files in a path (file or directory). */
