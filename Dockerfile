@@ -8,7 +8,7 @@ FROM base AS deps
 WORKDIR /app
 COPY package.json package-lock.json* .npmrc* ./
 COPY prisma ./prisma/
-RUN npm ci || npm install --legacy-peer-deps
+RUN npm ci
 
 # Build
 FROM base AS builder
@@ -48,12 +48,18 @@ COPY prisma/seed.js ./prisma/seed.js
 COPY entrypoint.sh ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh
 
-# Create data directory for SQLite
+# Create data directory for SQLite and set ownership
 RUN mkdir -p /app/data
+
+# Create non-root user for running the application
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 --ingroup nodejs nextjs && \
+    chown -R nextjs:nodejs /app
 
 EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 ENV DATABASE_URL="file:/app/data/rommseer.db"
 
+USER nextjs
 ENTRYPOINT ["./entrypoint.sh"]

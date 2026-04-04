@@ -70,11 +70,14 @@ export async function searchGames(
 
   const fields = "name, summary, cover.image_id, first_release_date, total_rating, total_rating_count, category, platforms.name, platforms.slug";
 
+  // Sanitize query: escape embedded quotes and cap length to prevent Apicalypse injection
+  const sanitized = query.replace(/"/g, '\\"').substring(0, 200);
+
   // Use IGDB's "search" endpoint — it ranks by relevance so official games come first
   const searchResponse = await fetch("https://api.igdb.com/v4/games", {
     method: "POST",
     headers,
-    body: `search "${query}"; fields ${fields}; limit ${limit};`,
+    body: `search "${sanitized}"; fields ${fields}; limit ${limit};`,
   });
 
   if (!searchResponse.ok) {

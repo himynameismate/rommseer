@@ -16,9 +16,9 @@ if [ -z "$NEXTAUTH_SECRET" ] || [ "$NEXTAUTH_SECRET" = "change-me-to-a-random-se
   fi
 fi
 
-# Run Prisma migrations
+# Run Prisma schema push (without --accept-data-loss to prevent silent data destruction)
 echo "[Entrypoint] Running Prisma db push..."
-node node_modules/prisma/build/index.js db push --skip-generate --accept-data-loss
+node node_modules/prisma/build/index.js db push --skip-generate
 
 # Seed the database
 echo "[Entrypoint] Running seed..."

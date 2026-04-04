@@ -8,7 +8,16 @@ import { ROM_EXTENSIONS } from "@/lib/constants";
 import { getValidExtensionsForPlatform, hasPlatformMismatch } from "@/lib/prowlarr";
 import * as fs from "fs";
 import * as path from "path";
-import { execSync } from "child_process";
+import { spawnSync } from "child_process";
+
+/**
+ * Check if `child` is a subpath of `parent` (safe against symlinks and Unicode tricks).
+ * Uses path.relative() instead of string prefix matching.
+ */
+function isSubPath(parent: string, child: string): boolean {
+  const rel = path.relative(path.resolve(parent), path.resolve(child));
+  return !!rel && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
 
 /**
  * After a download completes, copy the ROM file(s) to RomM's library directory.
@@ -66,9 +75,8 @@ export async function copyToRomMLibrary(
   const destDir = path.resolve(settings.rommLibraryPath, platformSlug, "roms");
 
   // Validate destDir is within the expected library path
-  const resolvedLibraryPath = path.resolve(settings.rommLibraryPath);
-  if (!destDir.startsWith(resolvedLibraryPath + path.sep) && destDir !== resolvedLibraryPath) {
-    logger.error(`[PostCopy] Path traversal detected: destDir "${destDir}" is outside library path "${resolvedLibraryPath}"`);
+  if (!isSubPath(path.resolve(settings.rommLibraryPath), destDir)) {
+    logger.error(`[PostCopy] Path traversal detected: destDir "${destDir}" is outside library path "${settings.rommLibraryPath}"`);
     return false;
   }
 
@@ -136,7 +144,7 @@ export async function copyToRomMLibrary(
           // For torrent/usenet downloads, fall back to copying the archive as-is
           logger.log(`[PostCopy] Extraction failed for "${filename}", copying archive as fallback`);
           const destFile = path.resolve(destDir, filename);
-          if (!destFile.startsWith(destDir + path.sep)) continue;
+          if (!isSubPath(destDir, destFile)) continue;
           fs.copyFileSync(srcFile, destFile);
           copied++;
         }
@@ -146,7 +154,7 @@ export async function copyToRomMLibrary(
       const destFile = path.resolve(destDir, filename);
 
       // Validate destFile is within destDir to prevent path traversal via filename
-      if (!destFile.startsWith(destDir + path.sep) && destFile !== destDir) {
+      if (!isSubPath(destDir, destFile)) {
         logger.error(`[PostCopy] Skipping file with suspicious name: "${filename}"`);
         continue;
       }
@@ -275,7 +283,7 @@ async function cleanupWrongDownload(
     if (sourcePath && fs.existsSync(sourcePath)) {
       // Safety: only delete within the downloads directory
       const resolved = path.resolve(sourcePath);
-      if (!resolved.startsWith(DOWNLOADS_PATH + path.sep) && resolved !== DOWNLOADS_PATH) {
+      if (!isSubPath(DOWNLOADS_PATH, resolved)) {
         logger.log(`[PostCopy] Skipping cleanup: "${resolved}" is outside ${DOWNLOADS_PATH}`);
         return;
       }
@@ -442,26 +450,34 @@ function extractArchiveToDir(archivePath: string, destDir: string): number {
   // Snapshot files already present so we can detect what was extracted
   const before = new Set(fs.existsSync(destDir) ? fs.readdirSync(destDir) : []);
 
-  // Try 7z first, then unar as fallback
+  // Try 7z first, then unar as fallback — use spawnSync with arg arrays to prevent command injection
   let extracted = false;
-  try {
-    execSync(`7z e "${archivePath}" -o"${destDir}" -y`, {
+  const result7z = spawnSync("7z", ["e", archivePath, `-o${destDir}`, "-y"], {
+    stdio: ["pipe", "pipe", "pipe"],
+    timeout: 120_000,
+  });
+
+  if (result7z.status === 0) {
+    extracted = true;
+  } else {
+    const err7z = result7z.stderr?.toString().trim() || result7z.error?.message || "unknown error";
+    logger.log(`[PostCopy] 7z failed for "${path.basename(archivePath)}": ${err7z}`);
+    // Try unar as fallback (better RAR/multi-format support)
+    const resultUnar = spawnSync("unar", [
+      "-force-overwrite", "-no-directory",
+      "-output-directory", destDir,
+      archivePath,
+    ], {
       stdio: ["pipe", "pipe", "pipe"],
       timeout: 120_000,
     });
-    extracted = true;
-  } catch (e) {
-    logger.log(`[PostCopy] 7z failed for "${path.basename(archivePath)}": ${e instanceof Error ? e.message : e}`);
-    // Try unar as fallback (better RAR/multi-format support)
-    try {
-      execSync(`unar -force-overwrite -no-directory -output-directory "${destDir}" "${archivePath}"`, {
-        stdio: ["pipe", "pipe", "pipe"],
-        timeout: 120_000,
-      });
+
+    if (resultUnar.status === 0) {
       extracted = true;
       logger.log(`[PostCopy] unar succeeded for "${path.basename(archivePath)}"`);
-    } catch (e2) {
-      logger.error(`[PostCopy] unar also failed for "${path.basename(archivePath)}":`, e2 instanceof Error ? e2.message : e2);
+    } else {
+      const errUnar = resultUnar.stderr?.toString().trim() || resultUnar.error?.message || "unknown error";
+      logger.error(`[PostCopy] unar also failed for "${path.basename(archivePath)}": ${errUnar}`);
     }
   }
 

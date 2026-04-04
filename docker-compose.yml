@@ -11,15 +11,28 @@ services:
       # NEXTAUTH_SECRET is auto-generated on first run if not set.
       # Uncomment and set your own for reproducibility across containers:
       # - NEXTAUTH_SECRET=your-random-secret-here
+      # Set to "true" if running behind a trusted reverse proxy (nginx, Caddy, etc.)
+      # - TRUST_PROXY=true
     volumes:
       - rommseer_data:/app/data
       # Mount the RomM library so Rommseer can copy completed ROMs into it.
       # This must point to the same directory RomM uses as its library root.
-      # Set the "Library Path" in Settings → RomM to /romm/library
+      # Set the "Library Path" in Settings -> RomM to /romm/library
       - /path/to/romm/library:/romm/library
       # Mount the download client's completed-downloads folder so Rommseer
       # can read finished files. Adjust to match your SABnzbd/qBittorrent config.
       - /path/to/downloads:/downloads
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: "2G"
+        reservations:
+          memory: "256M"
     restart: unless-stopped
 
 volumes:

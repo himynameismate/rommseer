@@ -84,15 +84,15 @@ export function getRateLimiter(
 
 /**
  * Extract an identifier for rate limiting from the request.
- * Uses x-forwarded-for header (common behind reverse proxies), falls back to
- * x-real-ip, or a constant if neither is available.
+ * Only trusts x-forwarded-for/x-real-ip headers when TRUST_PROXY=true,
+ * preventing clients from spoofing their IP to bypass rate limits.
  */
 export function getClientIp(req: NextRequest): string {
-  return (
-    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    req.headers.get("x-real-ip") ||
-    "unknown"
-  );
+  if (process.env.TRUST_PROXY === "true") {
+    const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+    if (forwarded) return forwarded;
+  }
+  return req.headers.get("x-real-ip") || "unknown";
 }
 
 /**

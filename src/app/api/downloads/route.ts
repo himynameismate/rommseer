@@ -62,6 +62,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "requestId and magnetUrl required" }, { status: 400 });
   }
 
+  // Validate URL scheme to prevent SSRF — only allow magnet:, http:, https:
+  try {
+    if (!magnetUrl.startsWith("magnet:")) {
+      const parsed = new URL(magnetUrl);
+      if (!["http:", "https:"].includes(parsed.protocol)) {
+        return NextResponse.json({ error: "Invalid download URL scheme" }, { status: 400 });
+      }
+    }
+  } catch {
+    return NextResponse.json({ error: "Invalid download URL" }, { status: 400 });
+  }
+
   const request = await prisma.request.findUnique({ where: { id: requestId }, include: { game: { include: { platform: true } } } });
   if (!request) return NextResponse.json({ error: "Request not found" }, { status: 404 });
 

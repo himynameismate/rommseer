@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/db";
+import { BCRYPT_ROUNDS } from "@/lib/auth";
+import { applyRateLimit } from "@/lib/rate-limit";
 
 export async function POST(req: NextRequest) {
+  // Rate limit registration: 5 attempts per minute per IP
+  const rateLimited = applyRateLimit(req, "register", 5, 60_000);
+  if (rateLimited) return rateLimited;
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let body: any;
   try {
@@ -39,9 +45,9 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  if (!password || typeof password !== "string" || password.length < 6) {
+  if (!password || typeof password !== "string" || password.length < 12) {
     return NextResponse.json(
-      { error: "Password must be at least 6 characters" },
+      { error: "Password must be at least 12 characters" },
       { status: 400 }
     );
   }
@@ -94,8 +100,8 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Hash password
-  const hashedPassword = await bcrypt.hash(password, 10);
+  // Hash password with consistent cost factor
+  const hashedPassword = await bcrypt.hash(password, BCRYPT_ROUNDS);
 
   // Create user
   const user = await prisma.user.create({
