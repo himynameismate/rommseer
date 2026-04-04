@@ -239,8 +239,8 @@ export async function searchArchiveOrg(
 
       logger.log(`[ArchiveOrg] "${q}": ${data.response.docs.length} results (${results.length} total)`);
 
-      // If first platform-specific query got results, don't bother with the generic one
-      if (results.length >= 3) break;
+      // Always run both queries to maximise candidate pool — the generic query
+      // often surfaces the correct item when the platform-specific one doesn't
     } catch (e) {
       logger.error(`[ArchiveOrg] Search error:`, e instanceof Error ? e.message : e);
     }
@@ -250,12 +250,52 @@ export async function searchArchiveOrg(
 }
 
 /**
+ * Normalize a string for fuzzy matching: lowercase, strip non-alphanumeric, collapse spaces.
+ */
+function normalizeForMatch(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Check if a filename is an exact match for the game (not a sequel/variant).
+ * Returns a score bonus: +200 for exact match, +50 for "contains" match,
+ * -100 if the filename contains the game name plus extra significant words (sequel).
+ */
+function scoreFileNameMatch(fileName: string, gameName: string): number {
+  const normFile = normalizeForMatch(path.basename(fileName, path.extname(fileName)));
+  const normGame = normalizeForMatch(gameName);
+
+  if (!normFile.includes(normGame)) return 0; // No match at all — neutral
+
+  // Check what comes after the game name in the filename
+  const matchEnd = normFile.indexOf(normGame) + normGame.length;
+  const after = normFile.substring(matchEnd).trim();
+
+  if (!after) return 200; // Exact match (nothing after game name)
+
+  // Check for sequel indicators: numbers, significant extra words
+  const NOISE = /^(the|and|or|a|of|gba|gbc|nds|snes|nes|n64|rom|usa|world|europe|en|u|e)$/i;
+  const words = after.split(/\s+/).filter((w) => w.length >= 2 && !NOISE.test(w));
+
+  if (words.length === 0) return 150; // Only noise/platform words after — still a good match
+
+  // Has significant extra words → likely a sequel or variant (e.g. "2 Black Hole Rising")
+  // Check if starts with a number (strong sequel indicator)
+  if (/^\d/.test(after)) return -100; // "Advance Wars 2" — definitely a sequel
+
+  if (words.length >= 2) return -80; // Multiple extra words — likely different game
+
+  return -30; // Single extra word — might be a subtitle, penalise mildly
+}
+
+/**
  * Get the list of files in an IA item and find the best ROM file for the target platform.
  * Returns the file metadata if a suitable ROM is found, null otherwise.
  */
 export async function findRomInItem(
   identifier: string,
   platformName?: string,
+  gameName?: string,
 ): Promise<{ fileName: string; size: number; downloadUrl: string } | null> {
   try {
     const url = `https://archive.org/metadata/${encodeURIComponent(identifier)}/files`;
@@ -300,6 +340,11 @@ export async function findRomInItem(
       // Boost/penalise based on region tags in the filename
       score += scoreFileRegion(file.name);
 
+      // Boost/penalise based on how well the filename matches the requested game
+      if (gameName) {
+        score += scoreFileNameMatch(file.name, gameName);
+      }
+
       candidates.push({ file, score });
     }
 
@@ -310,6 +355,16 @@ export async function findRomInItem(
 
     // Sort by score descending
     candidates.sort((a, b) => b.score - a.score);
+
+    // Log top candidates for debugging
+    if (candidates.length > 1) {
+      logger.log(`[ArchiveOrg] File candidates in "${identifier}":`);
+      for (const c of candidates.slice(0, 5)) {
+        const s = parseInt(c.file.size, 10) || 0;
+        logger.log(`  score=${c.score.toFixed(0)}  "${c.file.name}" (${(s / 1024 / 1024).toFixed(1)} MB)`);
+      }
+    }
+
     const best = candidates[0].file;
     const size = parseInt(best.size, 10) || 0;
 
@@ -411,14 +466,18 @@ export async function searchAndDownloadFromIA(
     return null;
   }
 
-  const normalize = (s: string) =>
-    s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
-  const normalizedGame = normalize(gameName);
+  const normalizedGame = normalizeForMatch(gameName);
 
-  // Filter to relevant items (title must contain game name), then score and sort by quality
+  // Filter to relevant items (title must contain game name), then score and sort by quality.
+  // Also penalise sequels at the item level (e.g. "Advance Wars 2" when searching "Advance Wars").
   const candidates = results
-    .filter((item) => normalize(item.title).includes(normalizedGame))
-    .map((item) => ({ item, score: scoreIaItem(item) }))
+    .filter((item) => normalizeForMatch(item.title).includes(normalizedGame))
+    .map((item) => {
+      let score = scoreIaItem(item);
+      // Penalise sequels: check what follows the game name in the item title
+      score += scoreFileNameMatch(item.title, gameName);
+      return { item, score };
+    })
     .sort((a, b) => b.score - a.score);
 
   if (candidates.length === 0) {
@@ -438,7 +497,7 @@ export async function searchAndDownloadFromIA(
     const { item, score } = candidates[i];
     logger.log(`[ArchiveOrg] Checking item ${i + 1}: "${item.title}" (${item.identifier}, score=${score.toFixed(1)})`);
 
-    const romFile = await findRomInItem(item.identifier, platformName);
+    const romFile = await findRomInItem(item.identifier, platformName, gameName);
     if (!romFile) continue;
 
     const downloaded = await downloadFromArchiveOrg(romFile.downloadUrl, romFile.fileName, maxSizeMb);
