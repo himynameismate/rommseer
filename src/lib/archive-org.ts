@@ -83,6 +83,102 @@ const IA_ROM_EXTENSIONS: Record<string, string[]> = {
 // Always allow archives (they often contain ROMs)
 const ARCHIVE_EXTENSIONS = [".zip", ".7z", ".rar"];
 
+// Words in IA item titles/identifiers that indicate a low-quality dump
+const BAD_ITEM_PATTERNS = [
+  /\bprototype?\b/i,
+  /\bproto\b/i,
+  /\bbeta\b/i,
+  /\bhack\b/i,
+  /\bpirate\b/i,
+  /\bbootleg\b/i,
+  /\bchinese\b/i,
+  /\bchina\b/i,
+  /\bunlicensed\b/i,
+  /\brepro\b/i,
+];
+
+// Words/patterns in IA item titles that indicate a good dump
+const GOOD_ITEM_PATTERNS = [
+  /\busa\b/i,
+  /\bworld\b/i,
+  /\beurope\b/i,
+  /\bmulti\b/i,
+  /\benglish\b/i,
+  /\ben,/i,   // multi-lang tag like "En,Fr,De"
+];
+
+// ROM filename region tags that indicate a preferred dump (no-intro style)
+const GOOD_FILE_REGIONS = [
+  /\(usa\)/i,
+  /\(world\)/i,
+  /\(europe\)/i,
+  /\(en\)/i,
+  /\ben,/i,         // language list starting with En
+  /\(u\)/i,         // old-style USA tag
+  /\(e\)/i,         // old-style Europe tag
+  /\(ue\)/i,        // USA+Europe combo
+  /\(uw\)/i,        // USA+World combo
+];
+
+// ROM filename patterns that indicate a bad dump
+const BAD_FILE_REGIONS = [
+  /\(china\)/i,
+  /\(zh\)/i,
+  /\(c\)(?!\+)/i,   // (C) but not (C+something) — old-style China tag
+  /\(japan\)/i,
+  /\(j\)/i,         // old-style Japan tag
+  /\(korea\)/i,
+  /\(k\)/i,
+  /\bproto(type)?\b/i,
+  /\bbeta\b/i,
+  /\bhack\b/i,
+  /\(unl\)/i,       // unlicensed
+];
+
+/**
+ * Score an IA search result item for ROM quality.
+ * Higher = better. Negative = should be filtered out.
+ */
+function scoreIaItem(item: IASearchResult): number {
+  const haystack = `${item.title} ${item.identifier}`.toLowerCase();
+  let score = 0;
+
+  for (const pat of BAD_ITEM_PATTERNS) {
+    if (pat.test(haystack)) score -= 50;
+  }
+  for (const pat of GOOD_ITEM_PATTERNS) {
+    if (pat.test(haystack)) score += 20;
+  }
+
+  // Boost by (log) download count — popular items tend to be better dumps
+  if (item.downloads && item.downloads > 0) {
+    score += Math.min(Math.log10(item.downloads) * 5, 25);
+  }
+
+  return score;
+}
+
+/**
+ * Score a file within an IA item for region/quality preference.
+ * Returns a bonus score (positive = good, negative = bad).
+ */
+function scoreFileRegion(fileName: string): number {
+  let bonus = 0;
+  for (const pat of GOOD_FILE_REGIONS) {
+    if (pat.test(fileName)) {
+      bonus += 30;
+      break; // Only count once
+    }
+  }
+  for (const pat of BAD_FILE_REGIONS) {
+    if (pat.test(fileName)) {
+      bonus -= 40;
+      break; // Only count once
+    }
+  }
+  return bonus;
+}
+
 /**
  * Search the Internet Archive for ROMs matching a game name and platform.
  * Uses the IA Advanced Search API (no authentication required).
@@ -201,6 +297,9 @@ export async function findRomInItem(
       // Boost by size (larger files are more likely to be the actual ROM)
       score += Math.min(size / (1024 * 1024), 10); // up to +10 for 10MB+
 
+      // Boost/penalise based on region tags in the filename
+      score += scoreFileRegion(file.name);
+
       candidates.push({ file, score });
     }
 
@@ -312,21 +411,32 @@ export async function searchAndDownloadFromIA(
     return null;
   }
 
-  // Try up to 5 items
-  for (let i = 0; i < Math.min(results.length, 5); i++) {
-    const item = results[i];
-    logger.log(`[ArchiveOrg] Checking item ${i + 1}: "${item.title}" (${item.identifier})`);
+  const normalize = (s: string) =>
+    s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  const normalizedGame = normalize(gameName);
 
-    // Basic relevance check — item title should contain the game name
-    const normalize = (s: string) =>
-      s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
-    const normalizedTitle = normalize(item.title);
-    const normalizedGame = normalize(gameName);
+  // Filter to relevant items (title must contain game name), then score and sort by quality
+  const candidates = results
+    .filter((item) => normalize(item.title).includes(normalizedGame))
+    .map((item) => ({ item, score: scoreIaItem(item) }))
+    .sort((a, b) => b.score - a.score);
 
-    if (!normalizedTitle.includes(normalizedGame)) {
-      logger.log(`[ArchiveOrg] Skipping "${item.title}" — not relevant to "${gameName}"`);
-      continue;
-    }
+  if (candidates.length === 0) {
+    logger.log(`[ArchiveOrg] No relevant results for "${gameName}"`);
+    return null;
+  }
+
+  logger.log(
+    `[ArchiveOrg] ${candidates.length} candidate(s) after relevance filter (sorted by quality):`,
+  );
+  for (const { item, score } of candidates.slice(0, 5)) {
+    logger.log(`  score=${score.toFixed(1)}  "${item.title}"  (${item.identifier})`);
+  }
+
+  // Try up to 5 items in quality order
+  for (let i = 0; i < Math.min(candidates.length, 5); i++) {
+    const { item, score } = candidates[i];
+    logger.log(`[ArchiveOrg] Checking item ${i + 1}: "${item.title}" (${item.identifier}, score=${score.toFixed(1)})`);
 
     const romFile = await findRomInItem(item.identifier, platformName);
     if (!romFile) continue;
@@ -341,6 +451,6 @@ export async function searchAndDownloadFromIA(
     };
   }
 
-  logger.log(`[ArchiveOrg] No suitable ROM found across ${Math.min(results.length, 5)} items`);
+  logger.log(`[ArchiveOrg] No suitable ROM found across ${Math.min(candidates.length, 5)} items`);
   return null;
 }
