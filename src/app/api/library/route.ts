@@ -4,22 +4,6 @@ import { authOptions } from "@/lib/auth";
 import { getCachedRomMClient } from "@/lib/clients";
 import { prisma } from "@/lib/db";
 
-interface RomMRom {
-  id: number;
-  igdb_id: number | null;
-  name: string;
-  slug: string;
-  summary: string;
-  platform_id: number;
-  platform_slug: string;
-  platform_name: string;
-  file_name: string;
-  file_size_bytes: number;
-  path_cover_s: string;
-  path_cover_l: string;
-  url_cover: string;
-}
-
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session) {
@@ -45,60 +29,80 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  // Get the RomM base URL for building cover image URLs
   const settings = await prisma.settings.findUnique({ where: { id: 1 } });
   const rommBaseUrl = (settings?.rommUrl || "").replace(/\/$/, "");
 
   try {
+    // Fetch platforms for name/slug lookup (ROM objects may have incomplete platform info)
     const platforms = await romm.getPlatforms();
+    const platformById = new Map(platforms.map((p) => [p.id, p]));
 
-    // Filter to requested platform if specified
-    const targetPlatforms = platformSlug
-      ? platforms.filter((p) => p.slug === platformSlug)
-      : platforms.filter((p) => p.rom_count > 0);
+    // Fetch ALL ROMs in a single call — avoids duplicates from per-platform calls
+    const allRoms = await romm.getRoms();
 
-    // Fetch ROMs from all relevant platforms
-    const allRoms: RomMRom[] = [];
-    for (const platform of targetPlatforms) {
-      if (platform.rom_count === 0) continue;
-      try {
-        const roms = await romm.getRoms(platform.id);
-        // Attach platform info since getRoms may not include it
-        for (const rom of roms) {
-          if (!rom.platform_name) rom.platform_name = platform.name;
-          if (!rom.platform_slug) rom.platform_slug = platform.slug;
-          allRoms.push(rom);
-        }
-      } catch {
-        // Skip platforms that fail to load
-      }
+    // Enrich each ROM with platform info from the platforms lookup
+    interface EnrichedRom {
+      id: number;
+      name: string;
+      summary: string;
+      file_name: string;
+      file_size_bytes: number;
+      url_cover: string;
+      path_cover_s: string;
+      path_cover_l: string;
+      platformId: number;
+      platformName: string;
+      platformSlug: string;
     }
 
-    // Apply search filter
-    let filtered = allRoms;
-    if (search) {
-      filtered = allRoms.filter((rom) =>
-        rom.name.toLowerCase().includes(search)
-      );
-    }
-
-    // Sort alphabetically
-    filtered.sort((a, b) => a.name.localeCompare(b.name));
-
-    // Build platform list from all ROMs (before search filter, for the filter bar)
-    const platformMap = new Map<string, { id: number; name: string; slug: string }>();
+    const enriched: EnrichedRom[] = [];
     for (const rom of allRoms) {
-      if (!platformMap.has(rom.platform_slug)) {
-        platformMap.set(rom.platform_slug, {
-          id: rom.platform_id,
-          name: rom.platform_name,
-          slug: rom.platform_slug,
+      const plat = platformById.get(rom.platform_id);
+      enriched.push({
+        id: rom.id,
+        name: rom.name,
+        summary: rom.summary,
+        file_name: rom.file_name,
+        file_size_bytes: rom.file_size_bytes,
+        url_cover: rom.url_cover,
+        path_cover_s: rom.path_cover_s,
+        path_cover_l: rom.path_cover_l,
+        platformId: rom.platform_id,
+        platformName: plat?.name || rom.platform_name || "Unknown",
+        platformSlug: plat?.slug || rom.platform_slug || "unknown",
+      });
+    }
+
+    // Build platform list for filter bar (from all ROMs, before search/platform filter)
+    const platformMap = new Map<string, { id: number; name: string; slug: string }>();
+    for (const rom of enriched) {
+      if (!platformMap.has(rom.platformSlug)) {
+        platformMap.set(rom.platformSlug, {
+          id: rom.platformId,
+          name: rom.platformName,
+          slug: rom.platformSlug,
         });
       }
     }
     const platformList = Array.from(platformMap.values()).sort((a, b) =>
       a.name.localeCompare(b.name)
     );
+
+    // Apply platform filter
+    let filtered = enriched;
+    if (platformSlug) {
+      filtered = filtered.filter((rom) => rom.platformSlug === platformSlug);
+    }
+
+    // Apply search filter
+    if (search) {
+      filtered = filtered.filter((rom) =>
+        rom.name.toLowerCase().includes(search)
+      );
+    }
+
+    // Sort alphabetically
+    filtered.sort((a, b) => a.name.localeCompare(b.name));
 
     // Paginate
     const total = filtered.length;
@@ -107,8 +111,6 @@ export async function GET(req: NextRequest) {
 
     // Map to response format
     const games = paged.map((rom) => {
-      // Build cover URL — RomM serves covers at /api/roms/{id}/cover
-      // or we can use path_cover_l which is a relative path
       let coverUrl: string | null = null;
       if (rom.url_cover) {
         coverUrl = rom.url_cover;
@@ -126,9 +128,9 @@ export async function GET(req: NextRequest) {
         fileName: rom.file_name,
         fileSize: rom.file_size_bytes,
         platform: {
-          id: rom.platform_id,
-          name: rom.platform_name,
-          slug: rom.platform_slug,
+          id: rom.platformId,
+          name: rom.platformName,
+          slug: rom.platformSlug,
         },
       };
     });

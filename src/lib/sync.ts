@@ -104,6 +104,7 @@ export function startBackgroundSync(): void {
 /**
  * Sync RomM library: fetch all ROMs, match against local Game records,
  * and update isAvailable + rommId fields.
+ * Also resets isAvailable=false for games that are no longer in RomM.
  */
 async function syncRomMLibrary(): Promise<void> {
   const romm = await getCachedRomMClient();
@@ -113,51 +114,69 @@ async function syncRomMLibrary(): Promise<void> {
 
   try {
     const platforms = await romm.getPlatforms();
+    const platformById = new Map(platforms.map((p) => [p.id, p]));
+
+    // Fetch ALL ROMs in a single call to get the complete picture
+    const allRoms = await romm.getRoms();
+
+    // Collect all RomM ROM IDs that currently exist
+    const activeRommIds = new Set<number>();
     let totalUpdated = 0;
 
-    for (const platform of platforms) {
-      if (platform.rom_count === 0) continue;
+    for (const rom of allRoms) {
+      activeRommIds.add(rom.id);
+      const platform = platformById.get(rom.platform_id);
+      if (!platform) continue;
 
-      try {
-        const roms = await romm.getRoms(platform.id);
-
-        // Match roms against local games by igdbId or name
-        for (const rom of roms) {
-          if (rom.igdb_id) {
-            // Match by (igdbId + platformSlug) so Advance Wars GBA and Switch
-            // are treated as separate library entries.
-            const updated = await prisma.game.updateMany({
-              where: {
-                igdbId: rom.igdb_id,
-                isAvailable: false,
-                platform: { slug: platform.slug },
-              },
+      if (rom.igdb_id) {
+        // Match by (igdbId + platformSlug) so Advance Wars GBA and Switch
+        // are treated as separate library entries.
+        const updated = await prisma.game.updateMany({
+          where: {
+            igdbId: rom.igdb_id,
+            isAvailable: false,
+            platform: { slug: platform.slug },
+          },
+          data: { isAvailable: true, rommId: rom.id },
+        });
+        totalUpdated += updated.count;
+      } else {
+        // Fallback: match by name + platform (case-insensitive)
+        const games = await prisma.game.findMany({
+          where: { isAvailable: false, platform: { slug: platform.slug } },
+          select: { id: true, name: true },
+        });
+        for (const game of games) {
+          if (game.name.toLowerCase() === rom.name.toLowerCase()) {
+            await prisma.game.update({
+              where: { id: game.id },
               data: { isAvailable: true, rommId: rom.id },
             });
-            totalUpdated += updated.count;
-          } else {
-            // Fallback: match by name + platform (case-insensitive)
-            const games = await prisma.game.findMany({
-              where: { isAvailable: false, platform: { slug: platform.slug } },
-              select: { id: true, name: true },
-            });
-            for (const game of games) {
-              if (game.name.toLowerCase() === rom.name.toLowerCase()) {
-                await prisma.game.update({
-                  where: { id: game.id },
-                  data: { isAvailable: true, rommId: rom.id },
-                });
-                totalUpdated++;
-              }
-            }
+            totalUpdated++;
           }
         }
-      } catch (e) {
-        logger.error(`[LibrarySync] Failed to sync platform "${platform.name}":`, e instanceof Error ? e.message : e);
       }
     }
 
-    logger.log(`[LibrarySync] Complete — ${totalUpdated} game(s) marked as available`);
+    // Reset isAvailable for games whose rommId is no longer in RomM
+    const staleGames = await prisma.game.findMany({
+      where: { isAvailable: true, rommId: { not: null } },
+      select: { id: true, rommId: true, name: true },
+    });
+
+    let totalReset = 0;
+    for (const game of staleGames) {
+      if (game.rommId && !activeRommIds.has(game.rommId)) {
+        await prisma.game.update({
+          where: { id: game.id },
+          data: { isAvailable: false, rommId: null },
+        });
+        totalReset++;
+        logger.log(`[LibrarySync] Reset "${game.name}" — no longer in RomM (rommId=${game.rommId})`);
+      }
+    }
+
+    logger.log(`[LibrarySync] Complete — ${totalUpdated} marked available, ${totalReset} reset`);
   } catch (e) {
     logger.error("[LibrarySync] Failed:", e instanceof Error ? e.message : e);
   }
