@@ -4,6 +4,7 @@
  * No external dependencies — just fetch() against archive.org endpoints.
  */
 import { logger } from "@/lib/utils";
+import { getValidExtensionsForPlatform } from "@/lib/prowlarr";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -36,48 +37,84 @@ export interface IADownloadResult {
   size: number;
 }
 
-// Platform abbreviations for IA search queries
+// Platform search terms for IA queries — first entry is the preferred abbreviation.
+// ROM extensions come from getValidExtensionsForPlatform() in prowlarr.ts.
 const IA_PLATFORM_TERMS: Record<string, string[]> = {
-  "game boy advance": ["gba", "game boy advance", "gameboy advance"],
-  "game boy color": ["gbc", "game boy color"],
+  // Nintendo - Handhelds
   "game boy": ["gb", "game boy", "gameboy"],
+  "game boy color": ["gbc", "game boy color", "gameboy color"],
+  "game boy advance": ["gba", "game boy advance", "gameboy advance"],
   "nintendo ds": ["nds", "nintendo ds"],
+  "nintendo dsi": ["dsi", "nintendo dsi"],
   "nintendo 3ds": ["3ds", "nintendo 3ds"],
+  "new nintendo 3ds": ["3ds", "new nintendo 3ds"],
+  // Nintendo - Home Consoles
   "nintendo entertainment system": ["nes", "nintendo"],
+  "nes": ["nes", "nintendo"],
+  "famicom": ["famicom", "nes"],
+  "family computer": ["famicom", "nes"],
+  "famicom disk system": ["fds", "famicom disk system"],
   "super nintendo entertainment system": ["snes", "super nintendo"],
+  "super nintendo": ["snes", "super nintendo"],
+  "snes": ["snes", "super nintendo"],
+  "super famicom": ["sfc", "super famicom"],
   "nintendo 64": ["n64", "nintendo 64"],
-  "gamecube": ["gamecube", "gcn"],
-  "wii": ["wii"],
+  "nintendo 64dd": ["n64dd", "64dd"],
+  "gamecube": ["gamecube", "gcn", "ngc"],
+  "nintendo gamecube": ["gamecube", "gcn", "ngc"],
+  "wii": ["wii", "nintendo wii"],
+  "wii u": ["wii u", "wiiu"],
   "nintendo switch": ["switch", "nintendo switch"],
+  // Nintendo - Other
+  "virtual boy": ["virtual boy", "virtualboy"],
+  "pokémon mini": ["pokemon mini"],
+  "game & watch": ["game and watch", "game watch"],
+  // Sony
   "playstation": ["psx", "ps1", "playstation"],
-  "playstation 2": ["ps2"],
-  "playstation portable": ["psp"],
+  "playstation 2": ["ps2", "playstation 2"],
+  "playstation 3": ["ps3", "playstation 3"],
+  "playstation portable": ["psp", "playstation portable"],
+  "playstation vita": ["vita", "psvita", "ps vita"],
+  // Sega
+  "sega master system": ["sms", "master system", "sega master system"],
   "sega mega drive/genesis": ["genesis", "mega drive", "sega genesis"],
-  "sega master system": ["sms", "master system"],
-  "dreamcast": ["dreamcast"],
-  "game gear": ["game gear"],
-};
-
-// Valid ROM extensions per platform (subset for filtering IA files)
-const IA_ROM_EXTENSIONS: Record<string, string[]> = {
-  "game boy advance": [".gba"],
-  "game boy color": [".gbc", ".gb"],
-  "game boy": [".gb"],
-  "nintendo ds": [".nds"],
-  "nintendo 3ds": [".3ds", ".cia"],
-  "nintendo entertainment system": [".nes"],
-  "super nintendo entertainment system": [".sfc", ".smc"],
-  "nintendo 64": [".n64", ".z64", ".v64"],
-  "gamecube": [".iso", ".gcm", ".gcz", ".rvz"],
-  "wii": [".iso", ".wbfs", ".rvz"],
-  "nintendo switch": [".nsp", ".xci", ".nsz"],
-  "playstation": [".bin", ".cue", ".iso", ".chd", ".pbp"],
-  "playstation 2": [".iso", ".chd"],
-  "playstation portable": [".iso", ".cso", ".pbp"],
-  "sega mega drive/genesis": [".md", ".gen", ".bin"],
-  "sega master system": [".sms"],
-  "dreamcast": [".gdi", ".cdi", ".chd"],
-  "game gear": [".gg"],
+  "genesis": ["genesis", "mega drive", "sega genesis"],
+  "mega drive": ["mega drive", "genesis", "megadrive"],
+  "sega saturn": ["saturn", "sega saturn"],
+  "sega 32x": ["32x", "sega 32x"],
+  "sega cd": ["sega cd", "mega cd"],
+  "dreamcast": ["dreamcast", "sega dreamcast"],
+  "game gear": ["game gear", "gamegear"],
+  "sg-1000": ["sg-1000", "sg1000"],
+  // Atari
+  "atari 2600": ["atari 2600", "atari"],
+  "atari 5200": ["atari 5200"],
+  "atari 7800": ["atari 7800"],
+  "atari jaguar": ["jaguar", "atari jaguar"],
+  "atari lynx": ["lynx", "atari lynx"],
+  "atari st": ["atari st"],
+  // Other
+  "neo geo": ["neo geo", "neogeo", "neo-geo"],
+  "neo geo pocket": ["neo geo pocket", "ngp"],
+  "neo geo pocket color": ["neo geo pocket color", "ngpc"],
+  "turbografx-16": ["turbografx", "pc engine", "tg16", "pce"],
+  "turbografx-cd": ["turbografx cd", "pc engine cd"],
+  "pc-fx": ["pc-fx", "pcfx"],
+  "3do": ["3do", "3do interactive"],
+  "colecovision": ["colecovision", "coleco"],
+  "intellivision": ["intellivision"],
+  "vectrex": ["vectrex"],
+  "wonderswan": ["wonderswan"],
+  "wonderswan color": ["wonderswan color"],
+  "msx": ["msx"],
+  "msx2": ["msx2"],
+  "zx spectrum": ["zx spectrum", "spectrum"],
+  "amstrad cpc": ["amstrad cpc", "amstrad"],
+  "commodore 64": ["c64", "commodore 64"],
+  "amiga": ["amiga", "commodore amiga"],
+  "arcade": ["arcade", "mame"],
+  "xbox": ["xbox", "original xbox"],
+  "xbox 360": ["xbox 360"],
 };
 
 // Always allow archives (they often contain ROMs)
@@ -305,9 +342,8 @@ export async function findRomInItem(
     const data = await res.json() as { result: IAFile[] };
     const files = data.result || [];
 
-    // Get valid extensions for the target platform
-    const platLower = platformName?.toLowerCase() || "";
-    const validExts = IA_ROM_EXTENSIONS[platLower] || [];
+    // Get valid extensions for the target platform (from shared prowlarr.ts data)
+    const validExts = platformName ? (getValidExtensionsForPlatform(platformName) || []) : [];
 
     // Score each file: prefer platform-specific ROM extensions, then archives
     const candidates: { file: IAFile; score: number }[] = [];
