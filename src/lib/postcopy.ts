@@ -8,6 +8,7 @@ import { ROM_EXTENSIONS } from "@/lib/constants";
 import { getValidExtensionsForPlatform, hasPlatformMismatch } from "@/lib/prowlarr";
 import * as fs from "fs";
 import * as path from "path";
+import { execSync } from "child_process";
 
 /**
  * After a download completes, copy the ROM file(s) to RomM's library directory.
@@ -61,7 +62,8 @@ export async function copyToRomMLibrary(
     return false;
   }
 
-  const destDir = path.resolve(settings.rommLibraryPath, platformSlug);
+  // ROMs live in <library>/<platform>/roms/ — the "roms" subfolder is required by RomM
+  const destDir = path.resolve(settings.rommLibraryPath, platformSlug, "roms");
 
   // Validate destDir is within the expected library path
   const resolvedLibraryPath = path.resolve(settings.rommLibraryPath);
@@ -110,9 +112,33 @@ export async function copyToRomMLibrary(
       }
     }
 
+    const ARCHIVE_EXTS = new Set([".zip", ".7z", ".rar"]);
     let copied = 0;
     for (const srcFile of romFiles) {
       const filename = path.basename(srcFile);
+      const ext = path.extname(filename).toLowerCase();
+
+      if (ARCHIVE_EXTS.has(ext)) {
+        // Extract archive directly into destDir, then delete the archive
+        const extracted = extractArchiveToDir(srcFile, destDir);
+        if (extracted > 0) {
+          copied += extracted;
+          logger.log(`[PostCopy] Extracted ${extracted} ROM(s) from "${filename}"`);
+          // Delete source archive for direct (IA) downloads since the file is now extracted
+          if (download.downloadType === "direct") {
+            try { fs.unlinkSync(srcFile); } catch { /* ignore */ }
+          }
+        } else {
+          // Extraction failed — fall back to copying the archive as-is
+          logger.log(`[PostCopy] Extraction failed for "${filename}", copying archive as fallback`);
+          const destFile = path.resolve(destDir, filename);
+          if (!destFile.startsWith(destDir + path.sep)) continue;
+          fs.copyFileSync(srcFile, destFile);
+          copied++;
+        }
+        continue;
+      }
+
       const destFile = path.resolve(destDir, filename);
 
       // Validate destFile is within destDir to prevent path traversal via filename
@@ -135,7 +161,7 @@ export async function copyToRomMLibrary(
       copied++;
     }
 
-    logger.log(`[PostCopy] Done: ${copied} file(s) copied to ${destDir}`);
+    logger.log(`[PostCopy] Done: ${copied} file(s) to ${destDir}`);
     return copied > 0;
   } catch (e) {
     logger.error(`[PostCopy] Failed:`, e instanceof Error ? e.message : e);
@@ -399,6 +425,45 @@ async function getPlatformSlug(
 
   // Fallback: use the platform slug from our database
   return platform.slug;
+}
+
+/**
+ * Extract a .zip / .7z / .rar archive into destDir using the system 7z binary.
+ * After extraction the archive itself is left at its original location (caller
+ * decides whether to delete it).  Returns the number of ROM files extracted.
+ */
+function extractArchiveToDir(archivePath: string, destDir: string): number {
+  try {
+    fs.mkdirSync(destDir, { recursive: true });
+
+    // Snapshot files already present so we can detect what was extracted
+    const before = new Set(fs.existsSync(destDir) ? fs.readdirSync(destDir) : []);
+
+    // "7z e" extracts without directory structure; -y answers yes to all prompts
+    execSync(`7z e "${archivePath}" -o"${destDir}" -y`, {
+      stdio: ["pipe", "pipe", "pipe"],
+      timeout: 120_000,
+    });
+
+    // Count newly-appeared actual ROM files (not archives spawned by extraction)
+    const ARCHIVE_EXTS = new Set([".zip", ".7z", ".rar"]);
+    const after = fs.readdirSync(destDir);
+    const newRoms = after.filter((f) => {
+      if (before.has(f)) return false;
+      const ext = path.extname(f).toLowerCase();
+      return ROM_EXTENSIONS.has(ext) && !ARCHIVE_EXTS.has(ext);
+    });
+
+    if (newRoms.length === 0) {
+      logger.log(`[PostCopy] Archive "${path.basename(archivePath)}" extracted but no ROM files found inside`);
+    } else {
+      logger.log(`[PostCopy] Extracted: ${newRoms.join(", ")}`);
+    }
+    return newRoms.length;
+  } catch (e) {
+    logger.error(`[PostCopy] 7z extraction failed for "${path.basename(archivePath)}":`, e instanceof Error ? e.message : e);
+    return 0;
+  }
 }
 
 /** Find ROM files in a path (file or directory). */
