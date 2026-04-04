@@ -18,12 +18,14 @@ import {
   X,
   Users,
   Bell,
+  Library,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/discover", label: "Discover", icon: Search },
+  { href: "/library", label: "Library", icon: Library },
   { href: "/requests", label: "Requests", icon: ListTodo },
 ];
 
