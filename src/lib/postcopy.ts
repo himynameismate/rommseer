@@ -489,8 +489,24 @@ function extractArchiveToDir(archivePath: string, destDir: string): number {
 
   if (!extracted) return 0;
 
-  // Count newly-appeared actual ROM files (not archives spawned by extraction)
   const ARCHIVE_EXTS_LOCAL = new Set([".zip", ".7z", ".rar"]);
+
+  // Flatten: if extraction created subdirectories (e.g. "Advance Wars/"),
+  // move ROM files from them up to destDir and remove the now-empty dirs.
+  const afterExtract = fs.readdirSync(destDir);
+  for (const entry of afterExtract) {
+    if (before.has(entry)) continue;
+    const entryPath = path.join(destDir, entry);
+    try {
+      if (fs.statSync(entryPath).isDirectory()) {
+        flattenDir(entryPath, destDir);
+        fs.rmSync(entryPath, { recursive: true, force: true });
+        logger.log(`[PostCopy] Removed extraction subfolder: ${entry}`);
+      }
+    } catch { /* ignore */ }
+  }
+
+  // Count newly-appeared ROM files at the top level of destDir
   const after = fs.readdirSync(destDir);
   const newRoms = after.filter((f) => {
     if (before.has(f)) return false;
@@ -504,6 +520,33 @@ function extractArchiveToDir(archivePath: string, destDir: string): number {
     logger.log(`[PostCopy] Extracted: ${newRoms.join(", ")}`);
   }
   return newRoms.length;
+}
+
+/** Recursively move ROM files from a subdirectory up to destDir (flattens extraction output). */
+function flattenDir(srcDir: string, destDir: string): void {
+  try {
+    const entries = fs.readdirSync(srcDir, { withFileTypes: true });
+    for (const entry of entries) {
+      const srcPath = path.join(srcDir, entry.name);
+      if (entry.isDirectory()) {
+        flattenDir(srcPath, destDir);
+      } else if (entry.isFile()) {
+        const ext = path.extname(entry.name).toLowerCase();
+        if (ROM_EXTENSIONS.has(ext)) {
+          const destFile = path.join(destDir, entry.name);
+          if (!isSubPath(destDir, destFile)) continue;
+          try {
+            fs.renameSync(srcPath, destFile);
+            logger.log(`[PostCopy] Moved "${entry.name}" from subfolder to ${destDir}`);
+          } catch {
+            // rename may fail across devices — fall back to copy+delete
+            fs.copyFileSync(srcPath, destFile);
+            fs.unlinkSync(srcPath);
+          }
+        }
+      }
+    }
+  } catch { /* ignore */ }
 }
 
 /** Find ROM files in a path (file or directory). */
