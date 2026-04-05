@@ -120,6 +120,36 @@ const IA_PLATFORM_TERMS: Record<string, string[]> = {
 // Always allow archives (they often contain ROMs)
 const ARCHIVE_EXTENSIONS = [".zip", ".7z", ".rar"];
 
+// Identifier prefixes/patterns that indicate a PC/DOS item — penalised when a console is requested
+const PC_IDENTIFIER_PATTERNS = [
+  /\bmsdos\b/i,
+  /\bdos_/i,
+  /^dos-/i,
+  /\bwindows\b/i,
+  /\bwin9[58]\b/i,
+  /\bscummvm\b/i,
+];
+
+/**
+ * Return a score penalty when the IA item identifier clearly signals a different
+ * platform than the one being requested.  E.g. "msdos_Super_Star_Wars_1994"
+ * should be heavily penalised when the user wants the SNES version.
+ */
+function scorePlatformIdentifier(identifier: string, platformName?: string): number {
+  if (!platformName) return 0;
+  const platLower = platformName.toLowerCase();
+  // Only apply the penalty when we're searching for a known console/handheld platform
+  const isConsolePlatform = platLower !== "pc" && platLower !== "dos" &&
+    platLower !== "windows" && platLower !== "amiga" &&
+    platLower !== "commodore 64" && platLower !== "msx" && platLower !== "msx2";
+  if (!isConsolePlatform) return 0;
+
+  for (const pat of PC_IDENTIFIER_PATTERNS) {
+    if (pat.test(identifier)) return -200;
+  }
+  return 0;
+}
+
 // Words in IA item titles/identifiers that indicate a low-quality dump
 const BAD_ITEM_PATTERNS = [
   /\bprototype?\b/i,
@@ -512,6 +542,8 @@ export async function searchAndDownloadFromIA(
       let score = scoreIaItem(item);
       // Penalise sequels: check what follows the game name in the item title
       score += scoreFileNameMatch(item.title, gameName);
+      // Penalise items whose identifier clearly indicates a different platform (e.g. msdos_*)
+      score += scorePlatformIdentifier(item.identifier, platformName);
       return { item, score };
     })
     .sort((a, b) => b.score - a.score);

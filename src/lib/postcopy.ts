@@ -515,6 +515,18 @@ function extractArchiveToDir(archivePath: string, destDir: string): number {
   });
 
   if (newRoms.length === 0) {
+    // Clean up any non-ROM junk files that 7z/unar deposited directly in destDir
+    const afterAll = fs.readdirSync(destDir);
+    for (const f of afterAll) {
+      if (before.has(f)) continue;
+      const fullPath = path.join(destDir, f);
+      try {
+        if (fs.statSync(fullPath).isFile()) {
+          fs.unlinkSync(fullPath);
+          logger.log(`[PostCopy] Removed non-ROM extracted file: ${f}`);
+        }
+      } catch { /* ignore */ }
+    }
     logger.log(`[PostCopy] Archive "${path.basename(archivePath)}" extracted but no ROM files found inside`);
   } else {
     logger.log(`[PostCopy] Extracted: ${newRoms.join(", ")}`);
