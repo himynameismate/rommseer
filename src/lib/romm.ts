@@ -252,8 +252,8 @@ export class RomMClient {
     return new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
         socket.disconnect();
-        // Scan was emitted, just resolve even if we didn't get confirmation
-        logger.log(`[RomM] Scan emit timed out waiting for response, scan likely started`);
+        // scan:done not received within 10s — scan likely still running in background
+        logger.log(`[RomM] Scan timed out waiting for scan:done — scan likely still running in RomM`);
         resolve();
       }, 10_000);
 
@@ -276,14 +276,7 @@ export class RomMClient {
           apis: ["igdb"],
           launchbox_remote_enabled: true,
         });
-
-        // Give RomM a moment to acknowledge, then disconnect
-        setTimeout(() => {
-          clearTimeout(timeout);
-          socket.disconnect();
-          logger.log(`[RomM] Scan triggered successfully`);
-          resolve();
-        }, 2000);
+        // Stay connected — wait for scan:done or the 10s timeout above
       });
 
       socket.on("scan:done", () => {
