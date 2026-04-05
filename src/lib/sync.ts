@@ -106,7 +106,7 @@ export function startBackgroundSync(): void {
  * and update isAvailable + rommId fields.
  * Also resets isAvailable=false for games that are no longer in RomM.
  */
-async function syncRomMLibrary(): Promise<void> {
+export async function syncRomMLibrary(): Promise<void> {
   const romm = await getCachedRomMClient();
   if (!romm) return;
 

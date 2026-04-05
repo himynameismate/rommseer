@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSession } from "next-auth/react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -13,6 +14,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Loader2,
+  RefreshCw,
 } from "lucide-react";
 
 interface LibraryGame {
@@ -49,8 +51,12 @@ function formatFileSize(bytes: number): string {
 }
 
 export default function LibraryPage() {
+  const { data: session } = useSession();
+  const isAdmin = (session?.user as { role?: string })?.role === "ADMIN";
+
   const [data, setData] = useState<LibraryResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [selectedPlatform, setSelectedPlatform] = useState<string | null>(null);
@@ -95,6 +101,16 @@ export default function LibraryPage() {
     searchRef.current?.focus();
   }, []);
 
+  const handleSync = async () => {
+    setSyncing(true);
+    try {
+      await fetch("/api/library/sync", { method: "POST" });
+      await fetchLibrary();
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const handlePlatformFilter = (slug: string | null) => {
     setSelectedPlatform((prev) => (prev === slug ? null : slug));
     setPage(1);
@@ -134,15 +150,28 @@ export default function LibraryPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-3xl font-bold">Library</h1>
-        <p className="text-muted-foreground">
-          {data && !data.error
-            ? `${data.total} game${data.total !== 1 ? "s" : ""} available in your library`
-            : data?.error
-              ? data.error
-              : "Browse games available in your library"}
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold">Library</h1>
+          <p className="text-muted-foreground">
+            {data && !data.error
+              ? `${data.total} game${data.total !== 1 ? "s" : ""} available in your library`
+              : data?.error
+                ? data.error
+                : "Browse games available in your library"}
+          </p>
+        </div>
+        {isAdmin && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleSync}
+            disabled={syncing}
+          >
+            <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
+            {syncing ? "Syncing…" : "Sync Library"}
+          </Button>
+        )}
       </div>
 
       {/* Search */}
