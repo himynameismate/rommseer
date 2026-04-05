@@ -408,21 +408,53 @@ export class ProwlarrClient {
     return this.fetch("/indexer");
   }
 
-  async search(query: string, categories?: number[], limit = 50): Promise<ProwlarrRelease[]> {
+  async search(query: string, categories?: number[], limit = 100): Promise<ProwlarrRelease[]> {
     const p = new URLSearchParams({ query, type: "search", limit: String(limit) });
     categories?.forEach((c) => p.append("categories", String(c)));
     return this.fetch(`/search?${p}`);
   }
 
-  /** Search with progressive query simplification, returns filtered+sorted results. */
+  /** Score a release for quality ranking. Higher = better. */
+  private scoreRelease(r: ProwlarrRelease, gameName: string): number {
+    let score = 0;
+    const t = r.title.toLowerCase();
+    const nameClean = gameName.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+
+    // Prefer No-Intro / Redump verified dumps (most reliable, correct dumps)
+    if (t.includes("no-intro") || t.includes("nointro")) score += 30;
+    if (t.includes("redump")) score += 25;
+
+    // Prefer common region tags (No-Intro naming convention)
+    if (t.includes("(usa)")) score += 20;
+    else if (t.includes("(world)")) score += 18;
+    else if (t.includes("(europe)") || t.includes("(eur)")) score += 12;
+    else if (t.includes("(en)") || t.includes("(en,")) score += 8;
+
+    // Prefer titles with exact game name match (case-insensitive, normalized)
+    if (t.includes(nameClean)) score += 15;
+
+    // Penalize romhacks, translations, prototypes, betas unless that's the game
+    if (t.includes("[t-") || t.includes("(hack)") || t.includes("romhack")) score -= 10;
+    if (t.includes("(proto)") || t.includes("(prototype)") || t.includes("(beta)")) score -= 5;
+    if (t.includes("[b]") || t.includes("(bad dump)")) score -= 20;
+
+    // Add seeder/grab count (capped to avoid overwhelming the quality signals)
+    if (r.protocol === "usenet") score += Math.min(r.grabs ?? 0, 50);
+    else score += Math.min((r.seeders ?? 0) * 2, 50);
+
+    return score;
+  }
+
+  /** Search with progressive query expansion and smart fallback, returns filtered+sorted results. */
   async searchForRom(gameName: string, platformName?: string, searchTemplate?: string, minSeeders = 0, maxSizeMb = 0): Promise<ProwlarrRelease[]> {
-    // Limit query variants to max 3 to reduce Prowlarr API calls
-    const queries = this.buildQueries(gameName, platformName, searchTemplate).slice(0, 3);
+    const queries = this.buildQueries(gameName, platformName, searchTemplate);
     const seen = new Set<string>();
     const all: ProwlarrRelease[] = [];
+    // Track which queries produced 0 cat results (for uncategorized fallback)
+    const zeroCatQueries: string[] = [];
 
     for (const q of queries) {
-      // Run category search first; only run uncategorized if category returned 0 results (Issue #6)
+      // Run category search first; fall back to uncategorized if category returned 0 results
       const cat = await this.search(q, GAME_CATEGORIES);
       let added = 0;
       for (const r of cat) {
@@ -431,12 +463,13 @@ export class ProwlarrClient {
       }
 
       if (cat.length === 0) {
+        zeroCatQueries.push(q);
         const noCat = await this.search(q);
         for (const r of noCat) {
           const key = r.guid || `${r.title}-${r.indexer}-${r.size}`;
           if (!seen.has(key)) { seen.add(key); all.push(r); added++; }
         }
-        logger.log(`[Prowlarr] "${q}": ${cat.length} cat + fallback uncategorized, ${added} new (${all.length} total)`);
+        logger.log(`[Prowlarr] "${q}": 0 cat → fallback uncategorized, ${added} new (${all.length} total)`);
       } else {
         logger.log(`[Prowlarr] "${q}": ${cat.length} cat results, ${added} new (${all.length} total)`);
       }
@@ -444,7 +477,8 @@ export class ProwlarrClient {
 
     const maxSize = maxSizeMb > 0 ? maxSizeMb * 1024 * 1024 : Infinity;
     const blocked: Record<string, string[]> = { seeders: [], relevance: [], extension: [], wrongExt: [], platform: [] };
-    const filtered = all.filter((r) => {
+
+    const passesFilter = (r: ProwlarrRelease): boolean => {
       if (!validUrl(r.downloadUrl, "http://", "https://") && !validUrl(r.magnetUrl, "magnet:", "http")) return false;
       if (r.protocol !== "usenet") {
         const effectiveMin = Math.max(minSeeders, 1);
@@ -456,7 +490,27 @@ export class ProwlarrClient {
       if (!matchesPlatformExtensions(r.title, platformName)) { blocked.wrongExt.push(r.title); return false; }
       if (hasPlatformMismatch(r.title, platformName)) { blocked.platform.push(r.title); return false; }
       return true;
-    });
+    };
+
+    let filtered = all.filter(passesFilter);
+
+    // Progressive fallback: if we have no usable results after all queries, broaden by
+    // running uncategorized search on the main queries that only had cat results (not already
+    // tried uncategorized). This handles indexers that miscategorize games.
+    if (filtered.length === 0) {
+      const mainQuery = queries[0] ?? gameName;
+      // Only retry uncategorized if this query hasn't been tried uncategorized already
+      if (!zeroCatQueries.includes(mainQuery)) {
+        logger.log(`[Prowlarr] 0 filtered results — broadening to uncategorized search for "${mainQuery}"`);
+        const noCat = await this.search(mainQuery);
+        for (const r of noCat) {
+          const key = r.guid || `${r.title}-${r.indexer}-${r.size}`;
+          if (!seen.has(key)) { seen.add(key); all.push(r); }
+        }
+        filtered = all.filter(passesFilter);
+        logger.log(`[Prowlarr] Uncategorized broadening: ${filtered.length} results`);
+      }
+    }
 
     // Log blocked results as summary instead of per-result
     const totalBlocked = Object.values(blocked).reduce((s, a) => s + a.length, 0);
@@ -470,10 +524,7 @@ export class ProwlarrClient {
       logger.log(`[Prowlarr] Blocked ${totalBlocked}: ${parts.join(", ")}`);
     }
 
-    filtered.sort((a, b) => {
-      const score = (r: ProwlarrRelease) => r.protocol === "usenet" ? (r.grabs ?? 0) : (r.seeders ?? 0);
-      return score(b) - score(a) || a.size - b.size;
-    });
+    filtered.sort((a, b) => this.scoreRelease(b, gameName) - this.scoreRelease(a, gameName) || a.size - b.size);
 
     logger.log(`[Prowlarr] ${all.length} total → ${filtered.length} after filter/sort`);
     return filtered;
@@ -485,6 +536,11 @@ export class ProwlarrClient {
     const simple = clean.replace(/\s*(Version|Edition|Special)\s*/gi, " ").replace(/\s+/g, " ").trim();
     const ascii = stripAccents(simple || clean);
 
+    // Article-stripped variants: "The Legend of Zelda" → "Legend of Zelda"
+    const stripArticle = (s: string) => s.replace(/^(The|A|An)\s+/i, "").trim();
+    const nameNoArticle = stripArticle(name);
+    const cleanNoArticle = stripArticle(clean);
+
     // Get short platform abbreviation for better search results.
     // Prefer the abbreviation (e.g. "gba") over the full name ("Game Boy Advance") —
     // indexers typically tag releases with short abbreviations and the full name
@@ -494,16 +550,30 @@ export class ProwlarrClient {
 
     // 1. User-configured template (highest priority)
     if (template) q.push(template.replace("{game_name}", name).replace("{platform}", platform || "").trim());
-    // 2. Name + abbreviated platform (e.g. "Advance Wars gba") — best balance of specificity
+
+    // 2. Name + abbreviated platform (e.g. "Advance Wars gba") — good specificity
     if (useAbbrev) q.push(`${name} ${platAbbrev}`);
-    // 3. Bare name — broadest query; platform mismatch filter handles wrong-platform results
+
+    // 3. Name + "USA" — No-Intro/Redump dumps almost always have a region tag; this
+    //    helps indexers that require region in the query to surface the right release
+    q.push(`${name} USA`);
+
+    // 4. Bare name — broadest query; platform mismatch filter handles wrong-platform results
     q.push(name);
-    // 4. Full platform name variant (long, often returns 0 results, kept as last resort)
+
+    // 5. Article-stripped + platform (e.g. "Legend of Zelda gba") — some indexers omit articles
+    if (nameNoArticle !== name) {
+      if (useAbbrev) q.push(`${nameNoArticle} ${platAbbrev}`);
+      q.push(nameNoArticle);
+    }
+
+    // 6. Full platform name variant (long, often returns 0 results, kept as last resort)
     if (platform && !useAbbrev) q.push(`${name} ${platform}`);
 
-    // Simplified name variants (strip subtitle after colon, strip Edition/Version/Special)
+    // 7. Simplified name variants (strip subtitle after colon, strip Edition/Version/Special)
     if (clean !== name) {
       if (useAbbrev) q.push(`${clean} ${platAbbrev}`);
+      q.push(`${clean} USA`);
       q.push(clean);
     }
     if (simple !== clean) {
@@ -513,6 +583,12 @@ export class ProwlarrClient {
     if (ascii !== (simple || clean)) {
       if (useAbbrev) q.push(`${ascii} ${platAbbrev}`);
       q.push(ascii);
+    }
+
+    // 8. Article-stripped clean variant (e.g. subtitle stripped + no article)
+    if (cleanNoArticle !== clean && cleanNoArticle !== nameNoArticle) {
+      if (useAbbrev) q.push(`${cleanNoArticle} ${platAbbrev}`);
+      q.push(cleanNoArticle);
     }
 
     return Array.from(new Set(q));
