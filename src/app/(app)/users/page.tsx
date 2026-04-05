@@ -80,23 +80,33 @@ export default function UsersPage() {
     setCreating(true);
     setCreateError("");
 
-    const res = await fetch("/api/users", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(formData),
-    });
+    try {
+      const res = await fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(formData),
+      });
 
-    if (res.ok) {
-      const newUser = await res.json();
-      setUsers((prev) => [newUser, ...prev]);
-      setFormData({ name: "", email: "", password: "" });
-      setShowCreateForm(false);
-    } else {
-      const error = await res.json();
-      setCreateError(error.error || "Failed to create user");
+      if (res.ok) {
+        const newUser = await res.json();
+        setUsers((prev) => [newUser, ...prev]);
+        setFormData({ name: "", email: "", password: "" });
+        setShowCreateForm(false);
+      } else {
+        let message = "Failed to create user";
+        try {
+          const error = await res.json();
+          message = error.error || message;
+        } catch {
+          message = `Server error (${res.status})`;
+        }
+        setCreateError(message);
+      }
+    } catch {
+      setCreateError("Network error — please try again");
+    } finally {
+      setCreating(false);
     }
-
-    setCreating(false);
   }
 
   if (!session || session.user.role !== "ADMIN") {
