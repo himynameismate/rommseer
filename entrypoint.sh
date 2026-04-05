@@ -1,6 +1,11 @@
 #!/bin/sh
 set -e
 
+# Fix ownership of the data directory in case the volume was previously
+# created by a root-owned container (pre-security-audit). This must run
+# as root before we drop privileges.
+chown -R nextjs:nodejs /app/data 2>/dev/null || true
+
 SECRET_FILE="/app/data/.nextauth-secret"
 
 # Auto-generate NEXTAUTH_SECRET if not provided or set to the old default placeholder
@@ -45,14 +50,13 @@ if [ -z "$NEXTAUTH_SECRET" ]; then
   exit 1
 fi
 
-# Run Prisma schema push (without --accept-data-loss to prevent silent data destruction)
+# Run Prisma and seed as nextjs so all created files are properly owned
 echo "[Entrypoint] Running Prisma db push..."
-node node_modules/prisma/build/index.js db push --skip-generate
+gosu nextjs node node_modules/prisma/build/index.js db push --skip-generate
 
-# Seed the database
 echo "[Entrypoint] Running seed..."
-node prisma/seed.js
+gosu nextjs node prisma/seed.js
 
-# Start the application
+# Drop privileges and start the application as nextjs (UID 1001)
 echo "[Entrypoint] Starting server..."
-exec node server.js
+exec gosu nextjs node server.js

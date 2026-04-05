@@ -1,7 +1,7 @@
 FROM node:20-slim AS base
 
 # Install OpenSSL (required by Prisma), p7zip-full + unar (for ROM archive extraction including RAR)
-RUN apt-get update -y && apt-get install -y openssl p7zip-full unar && rm -rf /var/lib/apt/lists/*
+RUN apt-get update -y && apt-get install -y openssl p7zip-full unar gosu && rm -rf /var/lib/apt/lists/*
 
 # Dependencies
 FROM base AS deps
@@ -61,5 +61,5 @@ ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 ENV DATABASE_URL="file:/app/data/rommseer.db"
 
-USER nextjs
+# Entrypoint runs as root to fix volume permissions, then execs as nextjs (UID 1001)
 ENTRYPOINT ["./entrypoint.sh"]
