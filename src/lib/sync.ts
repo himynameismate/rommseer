@@ -119,18 +119,18 @@ export async function syncRomMLibrary(): Promise<void> {
     // Fetch ALL ROMs in a single call to get the complete picture
     const allRoms = await romm.getRoms();
 
-    // Collect all RomM ROM IDs that currently exist
-    const activeRommIds = new Set<number>();
+    // Track which local game IDs are matched to a current RomM ROM this pass
+    const matchedLocalGameIds = new Set<number>();
     let totalUpdated = 0;
 
     for (const rom of allRoms) {
-      activeRommIds.add(rom.id);
       const platform = platformById.get(rom.platform_id);
       if (!platform) continue;
 
       if (rom.igdb_id) {
         // Match by (igdbId + platformSlug) so Advance Wars GBA and Switch
         // are treated as separate library entries.
+        // Update games that are not yet marked available
         const updated = await prisma.game.updateMany({
           where: {
             igdbId: rom.igdb_id,
@@ -140,39 +140,50 @@ export async function syncRomMLibrary(): Promise<void> {
           data: { isAvailable: true, rommId: rom.id },
         });
         totalUpdated += updated.count;
+
+        // Also record already-available games so they aren't reset below
+        const alreadyAvailable = await prisma.game.findMany({
+          where: { igdbId: rom.igdb_id, isAvailable: true, platform: { slug: platform.slug } },
+          select: { id: true },
+        });
+        for (const g of alreadyAvailable) matchedLocalGameIds.add(g.id);
       } else {
         // Fallback: match by name + platform (case-insensitive)
         const games = await prisma.game.findMany({
-          where: { isAvailable: false, platform: { slug: platform.slug } },
-          select: { id: true, name: true },
+          where: { platform: { slug: platform.slug } },
+          select: { id: true, name: true, isAvailable: true },
         });
         for (const game of games) {
           if (game.name.toLowerCase() === rom.name.toLowerCase()) {
-            await prisma.game.update({
-              where: { id: game.id },
-              data: { isAvailable: true, rommId: rom.id },
-            });
-            totalUpdated++;
+            matchedLocalGameIds.add(game.id);
+            if (!game.isAvailable) {
+              await prisma.game.update({
+                where: { id: game.id },
+                data: { isAvailable: true, rommId: rom.id },
+              });
+              totalUpdated++;
+            }
           }
         }
       }
     }
 
-    // Reset isAvailable for games whose rommId is no longer in RomM
-    const staleGames = await prisma.game.findMany({
-      where: { isAvailable: true, rommId: { not: null } },
-      select: { id: true, rommId: true, name: true },
+    // Reset ALL available games not matched in this sync pass — covers both
+    // rommId: null (pre-rommId-tracking era) and stale rommId cases.
+    const allAvailableGames = await prisma.game.findMany({
+      where: { isAvailable: true },
+      select: { id: true, name: true, rommId: true },
     });
 
     let totalReset = 0;
-    for (const game of staleGames) {
-      if (game.rommId && !activeRommIds.has(game.rommId)) {
+    for (const game of allAvailableGames) {
+      if (!matchedLocalGameIds.has(game.id)) {
         await prisma.game.update({
           where: { id: game.id },
           data: { isAvailable: false, rommId: null },
         });
         totalReset++;
-        logger.log(`[LibrarySync] Reset "${game.name}" — no longer in RomM (rommId=${game.rommId})`);
+        logger.log(`[LibrarySync] Reset "${game.name}" — not found in current RomM library`);
       }
     }
 
