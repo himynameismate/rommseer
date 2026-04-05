@@ -196,8 +196,14 @@ export function copyAndScan(requestId: number, downloadId: number): void {
       }
 
       if (!copied) {
-        // Copy failed — don't mark AVAILABLE, leave request in current state so admin can investigate
-        logger.error(`[PostCopy] No files were copied for request #${requestId} — NOT marking AVAILABLE. Check logs above for the reason.`);
+        // Copy failed — mark the download FAILED and reset the request to APPROVED
+        // so the admin can investigate and trigger a retry without re-downloading.
+        logger.error(`[PostCopy] No files were copied for request #${requestId} — marking download FAILED, resetting request to APPROVED.`);
+        await prisma.download.update({
+          where: { id: downloadId },
+          data: { status: "FAILED", error: "Post-copy failed: no files were copied to RomM library. Check library path and permissions." },
+        });
+        await prisma.request.update({ where: { id: requestId }, data: { status: "APPROVED" } });
         return;
       }
 
